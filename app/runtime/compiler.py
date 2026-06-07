@@ -36,9 +36,13 @@ class IRCompiler:
         resolved_args = [self._resolve_arg(arg, source_df, context) for arg in node.inputs]
         op = node.operation
 
-        # Operator execution
         if op == "COPY":
-            res = resolved_args[0]
+            # Strip for avoid regex failure
+            series = resolved_args[0]
+            if pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
+                res = series.astype(str).str.strip().replace(['nan', 'None', 'N/A', ''], np.nan)
+            else:
+                res = series
         elif op == "CONCAT":
             # Force into str type before concatenation to avoid NaN
             res = resolved_args[0].astype(str) + resolved_args[1].astype(str)
@@ -51,6 +55,11 @@ class IRCompiler:
         elif op == "MULTIPLY":
             res = pd.to_numeric(resolved_args[0], errors='coerce').fillna(0) * \
                   pd.to_numeric(resolved_args[1], errors='coerce').fillna(0)
+        elif op == "DIVIDE":
+            # Handle zero-denominator or non-numeric impurities
+            numerator = pd.to_numeric(resolved_args[0], errors='coerce').fillna(0)
+            denominator = pd.to_numeric(resolved_args[1], errors='coerce').fillna(1) # Impurities default to convert to 1，avoid system collapse
+            res = numerator / denominator.replace(0, 1)   # Fallback
         elif op == "DIVIDE":
             denominator = pd.to_numeric(resolved_args[1], errors='coerce')
             # Divide by 0 condition handling

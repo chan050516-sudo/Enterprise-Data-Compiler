@@ -1,47 +1,78 @@
 import logging
-from typing import Dict, Any
-from connectors.base import BaseConnector
-
-# 假设其他层的接口已定义
-# from app.schema.profiler import SchemaProfiler
-# from app.llm.mapper import LLMMapper
-# from app.runtime.executor import SandboxExecutor
-# from app.harness.schema_validator import HarnessValidator
+import pandas as pd
+from typing import Dict, Any, Tuple
+from app.schema.profiler import DataProfiler
+from app.llm.mapper import SemanticMapper
+from app.harness.ir_validator import IRValidator
+from app.runtime.compiler import IRCompiler
+from app.harness.odcs_enforcer import ODCSContractEnforcer 
 
 logger = logging.getLogger(__name__)
 
 class PipelineOrchestrator:
-    def __init__(self):
-        # 依赖注入各个Layer的实例
-        pass
+    """
+    Global Orchestration Hub: Strictly executes the 8-layer data transformation pipeline.
+    """
+    def __init__(self, llm_client):
+        self.mapper = SemanticMapper(llm_client)
+        self.compiler = IRCompiler()
+        self.enforcer = ODCSContractEnforcer() 
 
-    def run_pipeline(self, connector: 'BaseConnector') -> Dict[str, Any]:
+    def run_pipeline(
+        self, 
+        source_df: pd.DataFrame, 
+        target_ontology: Dict[str, Any],
+        reference_data: Dict[str, pd.Series] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
         """
-        End-to-end pipeline for data compiling
+        Executes the compilation pipeline and returns (Clean_DF, Quarantine_DF, Audit_Report).
         """
-        logger.info("Starting Enterprise Data Compilation Pipeline...")
+        logger.info("--- 🚀 Starting Data Compilation Pipeline ---")
         
-        # 1. Load Data (Layer 1)
-        raw_df = connector.read_data()
-        logger.info(f"Loaded {len(raw_df)} rows from source.")
+        # Layer 2: Schema Profiling
+        logger.info("[Layer 2] Extracting source dataset metadata...")
+        source_schema = DataProfiler.profile(source_df)
         
-        # 2. Profile Schema (Layer 2)
-        # source_schema = SchemaProfiler.profile(raw_df)
+        # Layer 4: LLM IR Generation
+        logger.info("[Layer 4] Semantic Mapper generating Transformation IR...")
+        ir_spec = self.mapper.generate_ir(source_schema, target_ontology)
         
-        # 3. Call LLM Mapping Engine (Layer 4)
-        # transform_code = LLMMapper.generate_mapping(source_schema, target_ontology)
+        # Layer 5 (Phase 1): IR Topology Validation (Pre-check)
+        logger.info("[Layer 5-P1] Validating IR static topology safety...")
+        IRValidator.validate_topology(ir_spec, list(source_df.columns), target_ontology)
         
-        # 4. Execute in Sandbox (Layer 6)
-        # 注意：此处应在执行前加入AST静态检查
-        # transformed_data = SandboxExecutor.execute(transform_code, raw_df)
+        # Layer 6: Native Compilation
+        logger.info("[Layer 6] Executing deterministic vectorized compilation...")
+        compiled_df = self.compiler.compile(source_df, ir_spec)
         
-        # 5. Validate with Harness (Layer 5)
-        # validation_report = HarnessValidator.validate(transformed_data)
+        # Layer 5 (Phase 2): ODCS Contract Enforcement (Post-check)
+        logger.info("[Layer 5-P2] Enforcing ODCS contracts and routing quarantine records...")
+        audit_report = self.enforcer.enforce(
+            compiled_df=compiled_df, 
+            target_ontology=target_ontology,
+            reference_data=reference_data
+        )
         
-        # 6. Review & Output (Layer 7 & 8)
-        # if validation_report.is_passed:
-        #     OutputWriter.write(transformed_data)
-        # else:
-        #     return {"status": "FAIL", "report": validation_report}
+        # Global Halt Condition: Break execution if a critical dataset-level failure occurs
+        if audit_report.get("status") == "CRITICAL_DATASET_FAILURE":
+            raise RuntimeError(f"Pipeline Halted: {audit_report.get('dataset_errors')}")
+        
+        # Physical Data Shunting (Quarantine Routing)
+        clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
+        
+        logger.info(f"--- Compilation Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
+        return clean_df, quarantine_df, audit_report
 
-        return {"status": "SUCCESS", "rows_processed": len(raw_df)}
+    def _route_data(self, compiled_df: pd.DataFrame, audit_report: dict) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Performs hard slicing to prevent anomalies from leaking into the clean destination."""
+        quarantine_indices = audit_report.get("quarantine_indices", [])
+        
+        if not quarantine_indices:
+            return compiled_df, pd.DataFrame(columns=compiled_df.columns)
+            
+        is_quarantined = compiled_df.index.isin(quarantine_indices)
+        
+        quarantine_df = compiled_df[is_quarantined].copy()
+        clean_df = compiled_df[~is_quarantined].copy()
+        
+        return clean_df, quarantine_df

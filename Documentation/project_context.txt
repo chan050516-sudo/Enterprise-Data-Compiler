@@ -128,7 +128,7 @@ Output: Strict Transformation IR (Intermediate Representation) JSON.
 ### LAYER 5 — HARNESS VALIDATION (SAFETY GATE)
 This layer acts as a two-phase gateway:
 - Phase 1 (Pre-execution Topology Check): Validates the LLM-generated IR against the target ontology fields and source schema column names before compilation. Catches field hallucinations or invalid operator arguments.
-- Phase 2 (Post-execution Data Check): Validates the compiled output DataFrame against deterministic business rules (e.g., non-negative constraints) and statistical metrics (e.g., row count/sum consistency).  
+- Phase 2 (Post-execution Data Check): ODCS Enforcer validates the compiled output DataFrame against deterministic business rules (e.g., non-negative constraints) and statistical metrics (e.g., row count/sum consistency).  
 
 ---
 
