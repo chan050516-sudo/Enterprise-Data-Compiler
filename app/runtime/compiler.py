@@ -36,6 +36,9 @@ class IRCompiler:
         resolved_args = [self._resolve_arg(arg, source_df, context) for arg in node.inputs]
         op = node.operation
 
+        # ----------------------------------------------------
+        # 1. 基础算子 (Math & Strings)
+        # ----------------------------------------------------
         if op == "COPY":
             # Strip for avoid regex failure
             series = resolved_args[0]
@@ -68,6 +71,26 @@ class IRCompiler:
             res = pd.to_numeric(resolved_args[0], errors='coerce')
         elif op == "TO_INT":
             res = pd.to_numeric(resolved_args[0], errors='coerce').fillna(0).astype(int)
+        
+        # ----------------------------------------------------
+        # 2. 规范化算子 (Canonicalization - 解决格式噪声的核心)
+        # ----------------------------------------------------
+        elif op == "PARSE_DATE":
+            # 将类似 "2026/06/08", "Jun 8 2026" 强制转换为标准 ISO8601 格式
+            res = pd.to_datetime(resolved_args[0], errors='coerce').dt.strftime('%Y-%m-%d')
+        elif op == "CLEAN_CURRENCY":
+            # 暴力清洗：剥离所有非数字字符 (保留小数点和负号)，"RM 1,000.50" -> 1000.50
+            cleaned_str = resolved_args[0].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
+            res = pd.to_numeric(cleaned_str, errors='coerce')
+        elif op == "FUZZY_MAP":
+            # 基础规范化：去两端空格 + 转大写 (例如 " pNding " -> "PNDING")
+            res = resolved_args[0].astype(str).str.strip().str.upper()
+            # 如果 node 里带了字典，可以执行确定的 Enum 映射
+            if node.options and "mapping_dict" in node.options:
+                mapping = node.options["mapping_dict"]
+                # 匹配不到的保留原样，交给 Layer 5 去抓
+                res = res.map(mapping).fillna(res)
+        
         else:
             raise NotImplementedError(f"Operator {op} is not supported by runtime compiler.")
 
@@ -103,8 +126,8 @@ class IRCompiler:
 
         return sorted_steps
 
-    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR) -> pd.DataFrame:
-        logger.info("Initializing Native Compilation Context...")
+    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None) -> pd.DataFrame:
+        logger.info("Initializing Native Compilation & Canonicalization Context...")
         runtime_context: Dict[str, pd.Series] = {}
         output_df = pd.DataFrame(index=source_df.index)
 
@@ -116,17 +139,35 @@ class IRCompiler:
             logger.debug(f"Compiling intermediate virtual register: {step_name}")
             runtime_context[step_name] = self._execute_node(node, source_df, runtime_context)
 
+        ontology_fields = target_ontology.get("fields", {}) if target_ontology else {}
+
         # 2. Compile and generate final target Ontology column
         for target_field, node in ir.output_mappings.items():
             logger.info(f"Compiling target business field: {target_field}")
             final_series = self._execute_node(node, source_df, runtime_context)
             
-            # Type conversion
+            # --- 业务语义注入 (Policy Imputation) ---
+            field_config = ontology_fields.get(target_field, {})
+            fallback_strategy = field_config.get("fallback_strategy", "KEEP_NULL")
+            default_val = field_config.get("default_value")
+
+            if fallback_strategy == "USE_ZERO":
+                final_series = pd.to_numeric(final_series, errors='coerce').fillna(0)
+            elif fallback_strategy == "DEFAULT_STRING":
+                final_series = final_series.fillna(default_val if default_val else "UNKNOWN")
+            elif fallback_strategy == "HALT":
+                # 对于强审计列（HALT），拒绝填充。
+                # 保留 NaN 状态，这样稍后在 Layer 5 Trust Engine 扫描 `not_null` 时会精准地把这行抓进隔离区。
+                pass
+
+            # --- ERP 级类型锚定 (Type Anchoring) ---
             if node.target_type == "float":
                 output_df[target_field] = pd.to_numeric(final_series, errors='coerce')
             elif node.target_type == "int":
-                output_df[target_field] = pd.to_numeric(final_series, errors='coerce').fillna(0).astype(int)
+                # 【终极防御】：使用 Pandas 的 'Int64' (可空整数) 替代原生 'int'。
+                # 防止由于某行触发了 HALT 策略保留了 NaN，导致整列发生浮点数逃逸 (例如 "单据号 100" 变成 "100.0")
+                output_df[target_field] = pd.to_numeric(final_series, errors='coerce').astype('Int64')
             else:
-                output_df[target_field] = final_series.astype(str)
+                output_df[target_field] = final_series
 
         return output_df

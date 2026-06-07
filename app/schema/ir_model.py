@@ -11,9 +11,11 @@ class IRNode(BaseModel):
     Node of Operator Graph (V2 N-to-1 architecture)
     No longer single source, but operation + inputs
     """
-    operation: Literal["COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT"]
+    operation: Literal["COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
+                       "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP"]
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"
+    options: Optional[Dict[str, Any]] = None
 
 class AdvancedTransformationIR(BaseModel):
     """

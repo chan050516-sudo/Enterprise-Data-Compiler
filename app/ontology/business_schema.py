@@ -5,16 +5,18 @@ from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
+FallbackStrategy = Literal["KEEP_NULL", "USE_ZERO", "HALT", "DEFAULT_STRING"]
+
 # ==========================================
 # 1. ODCS 契约元模型 (Meta-Models)
 # 作用：校验 JSON 配置文件本身的合法性
 # ==========================================
 
 class RowLevelRule(BaseModel):
-    column: str
+    column: Optional[str] = None
     assertion: Literal[
         "not_null", "non_negative", "range", "max_length", 
-        "pattern", "unique", "cross_field", "enum_match", "foreign_key"
+        "pattern", "unique", "cross_field", "enum_match", "foreign_key", "expression"
     ]
     severity: Literal["error", "warning"] = "error"
     tolerance_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -28,6 +30,8 @@ class RowLevelRule(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     max_length: Optional[int] = None
+    formula: Optional[str] = None   # e.g. "revenue == (gross_sales + tax) - discount"
+    tolerance_window_days: Optional[int] = None   # e.g. 3，Tolerate 3 days difference between payment and transaction succeed date
 
 class DatasetLevelRule(BaseModel):
     metric: Literal["volume_check", "sum_alignment", "orphan_rate"]
@@ -43,6 +47,8 @@ class EntityField(BaseModel):
     type: Literal["string", "float", "int", "boolean", "date", "datetime"]
     logicalType: Optional[str] = None
     description: Optional[str] = None
+    fallback_strategy: FallbackStrategy = "KEEP_NULL"
+    default_value: Optional[Any] = None
 
 class TargetOntology(BaseModel):
     dataset_name: str

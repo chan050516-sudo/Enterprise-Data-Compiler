@@ -28,13 +28,14 @@ Layer 4: LLM Mapping Engine (generates structured IR JSON)
     ↓
 Layer 5-P1: IR Topology Validator (DAG Pre-check)
     ↓
-Layer 6: Deterministic Compiler Runtime (Vectorized Pandas)
+Layer 6: Deterministic Compiler & Canonicalizer (Vectorized Pandas + Native Clean Ops)
     ↓
-Layer 5-P2: ODCS Contract Enforcer (Row-level rules + Dataset-level asserts)
+Layer 5-P2: Data Trust & Contract Engine (Confidence Scoring + ODCS Enforcement)
     ↓
-Human Review Output
-    ↓
-Split Output: Clean Data (to SQLite) / Quarantined Data (to Review)
+[Decision Router]
+  ├── Confidence > 0.95 & Passed → Split Output: Clean Data (Layer 8)
+  ├── Confidence > 0.80 & Failed → [Self-Healing Feedback Loop] → Back to Layer 4
+  └── Confidence < 0.80 / Max Retries Reached → Quarantine for asynchronous review (Layer 7)
 ```
 
 ---
@@ -95,12 +96,12 @@ Output schema profile JSON (Example):
 }
 
 ---
-
-### LAYER 3 — BUSINESS ONTOLOGY & CONTRACTS
-Purpose: Define target structured business schema AND strict ODCS (Open Data Contract Standard) validation rules.
+### LAYER 3 — SEMANTIC POLICY ENGINE & ONTOLOGY
+Purpose: Define target structured business schema, ODCS (Open Data Contract Standard) constraints, and business-level semantics.
 Structure: 
 - Fields definitions (logical types)
-- ODCS Contracts (Row-level rules like unique/pattern, and Dataset-level rules like volume conservation).
+- Semantic Policies (Fallback strategies for missing values like KEEP_NULL, USE_ZERO, HALT).
+- ODCS Contracts (Complex mathematical expressions, volume conservation, and tolerance windows for asynchronous business delays).
 *Also acts as the host for the Mapping Registry (Historical mapping memory).*
 
 ---
@@ -116,25 +117,28 @@ Output: Strict Transformation IR (Intermediate Representation) JSON.
 
 ---
 
-### LAYER 5 — HARNESS VALIDATION (SAFETY GATE)
-This layer acts as a two-phase gateway:
+### LAYER 5 — DATA TRUST & CONTRACT ENGINE
+This layer replaces the traditional validation harness.
 - Phase 1 (Pre-check): IR Topology Validator (DAG cycle detection).
-- Phase 2 (Post-check): ODCS Contract Enforcer. A vectorized engine that reads the Layer 3 ODCS Contracts and applies them to the compiled DataFrame. Employs severity levels (Error vs. Warning) and tolerance thresholds for intelligent quarantine routing.
+- Phase 2 (Post-check): Contract & Trust Engine. Evaluates the compiled DataFrame against Layer 3 policies. 
+- Features: Generates a Trust Score based on mapping confidence, data integrity, and dataset-level assertions (e.g., Sum Alignment). Determines whether to pass, auto-heal, or quarantine data.
 
 ---
 
-### LAYER 6 — DETERMINISTIC COMPILER RUNTIME
-Purpose: Safely compile and execute the validated IR.
-* No Sandbox Required: Since no arbitrary Python code is executed, OS-level containment is obsolete.   
-- Mechanism: Translates the declarative IR instructions into deterministic, native, vectorized Pandas operations.
-- Error Handling: Handles computational exceptions (e.g., division by zero, non-numeric strings) gracefully via vector type coercion without halting the system.
+### LAYER 6 — DETERMINISTIC COMPILER RUNTIME & CANONICALIZER
+Purpose: Safely compile and execute the validated IR, whilst handling formatting chaos natively.
+- Mechanism: Translates declarative IR instructions into native Pandas operations.
+- Canonicalization: Includes high-level operators (e.g., PARSE_DATE, CLEAN_CURRENCY, FUZZY_MAP) to standardize formats (ISO8601, Numeric) before complex math operations.
+- Error Handling: Handles computational exceptions gracefully via vector type coercion.
 
 ---
 
 ### LAYER 7 — HUMAN REVIEW MODULE
 
-Purpose:
-Expose validation results.
+Purpose: Manage anomalies through autonomous remediation (MAPE-K loop).
+- Mechanism: Extracts failing rule IDs and messy data samples from the Data Trust Engine (Layer 5).
+- Feedback Loop: Packages the failure context and prompts the LLM Mapping Engine (Layer 4) for an incremental topology patch.
+- Human Review: Only triggered when max automated retries are exhausted or data suffers critical systemic collapse.
 
 Output:
 
@@ -164,17 +168,20 @@ Write clean structured data to:
 The system MUST implement a single orchestrator:
 
 ```text
-run_pipeline(input_file):
-    run_pipeline(input_file, target_ontology):
+run_pipeline(input_file, target_ontology, max_retries=2):
     load raw data (Layer 1)
-    profile schema attributes (Layer 2)
-    call LLM mapping engine to generate IR Specification (Layer 4)
-    validate IR topology via Harness Pre-check (Layer 5 Phase 1)
-    if fail → reject IR and return compilation error
-    compile IR and execute via Deterministic Compiler (Layer 6)
-    validate output data via Harness Post-check (Layer 5 Phase 2)
-    if pass → write to SQLite/CSV (Layer 8)
-    else → route anomalous records to Quarantine DB for Human Review (Layer 7)
+    profile semantic attributes (Layer 2)
+    
+    for attempt in 0 to max_retries:
+        call LLM engine to generate/patch IR Specification (Layer 4)
+        validate IR topology (Layer 5 Phase 1)
+        compile and canonicalize data (Layer 6)
+        evaluate Trust Score and enforce ODCS (Layer 5 Phase 2)
+        
+        if passed and high_confidence → write to DB (Layer 8) and exit
+        if failed and attempt < max_retries → extract messy samples, loop back to Layer 4
+        
+    route unhealable anomalous records to Quarantine DB (Layer 7)
 ```
 
 ---

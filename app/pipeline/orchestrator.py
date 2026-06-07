@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 from typing import Dict, Any, Tuple
-from app.schema.profiler import DataProfiler
+from app.legacy.profiler import DataProfiler
 from app.llm.mapper import SemanticMapper
 from app.harness.ir_validator import IRValidator
 from app.runtime.compiler import IRCompiler
