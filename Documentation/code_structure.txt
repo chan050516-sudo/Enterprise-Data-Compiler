@@ -1,62 +1,59 @@
 enterprise-data-compiler/
 │
-├── README.md
-├── requirements.txt
-├── .env
-├── docker/
-│   └── sandbox.Dockerfile
+├── README.md                  # 项目定义已升级为：AI-driven Data Compiler 
+├── requirements.txt           # 清除了原有沙盒可能需要的进程间通信或底层隔离库 
+├── .env                       # 仅保留基础的 LLM API 密钥与环境变量 
 │
-├── app/
-│   ├── main.py                 # entry point (CLI or API)
+├── app/ 
+│   ├── main.py                # 整个编译系统的 CLI 入口 
 │
-│   ├── config/
-│   │   └── settings.py
+│   ├── config/ 
+│   │   └── settings.py        # 包含算子白名单、类型契约等全局静态配置 
 │
-│   ├── connectors/            # Layer 1
-│   │   ├── base.py
-│   │   ├── csv_connector.py
-│   │   └── excel_connector.py
+│   ├── connectors/            # Layer 1: 确定性数据读入 
+│   │   ├── base.py 
+│   │   ├── csv_connector.py 
+│   │   └── excel_connector.py 
 │
-│   ├── schema/                # Layer 2
-│   │   ├── profiler.py
-│   │   └── schema_model.py
+│   ├── schema/                # Layer 2: 输入源结构属性感知 
+│   │   ├── profiler.py 
+│   │   ├── schema_model.py    # 提取源头 Meta 描述 
+│   │   └── ir_model.py        # 【核心资产】Transformation IR 语法树契约
 │
-│   ├── ontology/              # Layer 3
-│   │   ├── business_schema.py
-│   │   └── ontology_registry.json
+│   ├── ontology/              # Layer 3: STATIC 目标企业业务模型 
+│   │   ├── business_schema.py 
+│   │   └── ontology_registry.json 
 │
-│   ├── llm/                   # Layer 4 (核心AI)
-│   │   ├── mapper.py
-│   │   ├── prompt_templates.py
-│   │   └── llm_client.py
+│   ├── llm/                   # Layer 4: 语义映射器（仅输出标准 IR JSON） 
+│   │   ├── mapper.py 
+│   │   ├── prompt_templates.py # 【核心资产】反向强约束大模型的规范 Prompt [cite: 2]
+│   │   └── llm_client.py [cite: 3]
 │
-│   ├── harness/               # Layer 5 (核心防线)
-│   │   ├── schema_validator.py
-│   │   ├── business_rules.py
+│   ├── harness/               # Layer 5: 两阶段核心安全防线 
+│   │   ├── ir_validator.py    # 【Phase 1】IR 静态拓扑校验器（拦截字段幻觉与未知算子）
 │   │   ├── referential_checker.py
-│   │   ├── statistical_checker.py
-│   │   └── report.py
+│   │   ├── business_rules.py  # 【Phase 2】运行时业务约束（值域检查、非法值拦截） 
+│   │   ├── statistical_checker.py # 【Phase 2】统计学守恒校验（行数、汇总值审计） 
+│   │   └── report.py          # 编译质量综合评估报告 
 │
-│   ├── runtime/               # Layer 6
-│   │   ├── executor.py
-│   │   └── sandbox_runner.py
+│   ├── runtime/               # Layer 6: 本地确定性数据编译器 
+│   │   └── compiler.py        # 【核心资产】纯向量化算子流转引擎，彻底替代原 Sandbox 
 │
-│   ├── review/                # Layer 7
-│   │   ├── review_engine.py
-│   │   └── ui_mock.py
+│   ├── review/                # Layer 7: 人工介入复核层 [cite: 4]
+│   │   ├── review_engine.py   # 处理隔离区数据的审批、重修与回流 [cite: 4]
+│   │   └── quarantine_viewer.py # 脏数据/异常映射可视化 [cite: 4]
 │
-│   ├── output/                # Layer 8
-│   │   ├── exporter.py
-│   │   └── sqlite_writer.py
+│   ├── output/                # Layer 8: 目标存储写入 [cite: 4]
+│   │   ├── exporter.py [cite: 4]
+│   │   └── sqlite_writer.py   # 安全持久化至企业 ERP 数据库（SQLite 镜像） [cite: 4]
 │
-│   ├── pipeline/
-│   │   └── orchestrator.py   # glue of all 8 layers
+│   ├── pipeline/ 
+│   │   └── orchestrator.py    # 全局调度中枢：串联加载、图检查、编译与数据审计 
 │
-│
-├── tests/
-│   ├── test_mapping.py
-│   ├── test_harness.py
-│   └── sample_data/
+│ tests/ 
+│   ├── test_mapping.py        # 验证 LLM 映射 IR 的准确度 
+│   ├── test_harness.py        # 专门针对恶意/幻觉 IR 的静态拦截测试 
+│   └── sample_data/ [cite: 5]
 │       ├── messy.csv
 │       └── target_schema.json
 │

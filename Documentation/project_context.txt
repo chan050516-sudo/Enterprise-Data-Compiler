@@ -6,11 +6,8 @@
 
 You are building an **Enterprise Data Compiler System**.
 
-The system transforms **messy enterprise data (CSV/Excel)** into **structured business models** using:
-
-* LLM-generated transformation logic
-* deterministic validation layer (Harness)
-* sandbox execution
+The system transforms messy enterprise data (CSV/Excel) into structured business models  using LLM-generated declarative Intermediate Representation (IR), a deterministic validation layer (Harness), and a native compiler runtime. 
+AI DOES NOT write or execute raw Python code.
 
 This is NOT a chatbot, NOT an agent system.
 
@@ -27,9 +24,11 @@ Raw CSV/Excel
     ↓
 Schema Profiling Layer
     ↓
-LLM Mapping Engine (generate transformation logic)
+LLM Mapping Engine (generate structured IR JSON)
     ↓
-Python transformation function execution
+IR Validator (Harness Pre-check)
+    ↓
+Native Compiler Execution (Vectorized Pandas Operators)
     ↓
 Harness Validation (strict rules + stats)
     ↓
@@ -45,10 +44,11 @@ SQLite structured output
 ## ⚠️ IMPORTANT DESIGN CONSTRAINTS
 
 1. AI MUST NOT directly modify database
-2. AI ONLY generates transformation logic (Python code or mapping JSON)
-3. All AI outputs MUST be validated by Harness before execution
-4. System must be deterministic and auditable
-5. No multi-agent system, no autonomous planning loops
+2. 2. AI MUST NOT generate executable programming code (Python/SQL). AI ONLY generates declarative Transformation IR specifications conforming to a strict JSON schema.
+3. Execution must be entirely driven by white-listed, pre-defined native operators. No exec() or eval() mechanisms are permitted in the system.
+4. All AI outputs MUST be validated by Harness before execution
+5. System must be deterministic and auditable
+6. No multi-agent system, no autonomous planning loops
 
 ---
 
@@ -118,90 +118,25 @@ No graph DB required.
 ---
 
 ### LAYER 4 — LLM MAPPING ENGINE (CRITICAL)
-
-Input:
-
-* source schema
-* target ontology
-
-Output:
-
-STRICT JSON mapping OR python transform function.
-
-Example output:
-
-```json
-{
-  "cust_no": "customer_id",
-  "name": "customer_name"
-}
-```
-
-OR
-
-```python
-def transform(row):
-    return {
-        "customer_id": row["cust_no"],
-        "customer_name": row["name"]
-    }
-```
+Input: Source schema, target ontology. 
+Output: Strict Transformation IR (Intermediate Representation) JSON.  
+- Must specify target fields, trusted operations (COPY, CONCAT, ADD, etc.), and typed input arguments (COLUMN_REF or LITERAL).
+- Absolutely no code blocks or dynamic expressions allowed.
 
 ---
 
-### LAYER 5 — HARNESS VALIDATION (CRITICAL CORE)
-
-This is the most important safety layer.
-
-It MUST implement:
-
-#### 5.1 Schema validation
-
-* missing fields
-* wrong types
-
-#### 5.2 Business rules validation
-
-Example rules:
-
-* amount >= 0
-* dates not in future
-
-#### 5.3 Referential integrity checks
-
-* foreign keys must exist
-
-#### 5.4 Statistical validation
-
-* sum(before) ≈ sum(after)
-* row count consistency
-
-Output:
-
-```json
-{
-  "status": "PASS | FAIL",
-  "errors": [],
-  "metrics": {}
-}
-```
+### LAYER 5 — HARNESS VALIDATION (SAFETY GATE)
+This layer acts as a two-phase gateway:
+- Phase 1 (Pre-execution Topology Check): Validates the LLM-generated IR against the target ontology fields and source schema column names before compilation. Catches field hallucinations or invalid operator arguments.
+- Phase 2 (Post-execution Data Check): Validates the compiled output DataFrame against deterministic business rules (e.g., non-negative constraints) and statistical metrics (e.g., row count/sum consistency).  
 
 ---
 
-### LAYER 6 — SANDBOX EXECUTION
-
-Purpose:
-Safely execute AI-generated transformation code.
-
-Constraints:
-
-* MUST run in isolated Python environment
-* NO system access
-* NO file system write outside project scope
-
-Use:
-
-* subprocess OR restricted python runtime
+### LAYER 6 — DETERMINISTIC COMPILER RUNTIME
+Purpose: Safely compile and execute the validated IR.
+* No Sandbox Required: Since no arbitrary Python code is executed, OS-level containment is obsolete.   
+- Mechanism: Translates the declarative IR instructions into deterministic, native, vectorized Pandas operations.
+- Error Handling: Handles computational exceptions (e.g., division by zero, non-numeric strings) gracefully via vector type coercion without halting the system.
 
 ---
 
@@ -239,14 +174,16 @@ The system MUST implement a single orchestrator:
 
 ```text
 run_pipeline(input_file):
-    load data
-    profile schema
-    call LLM mapping engine
-    generate transformation function
-    execute in sandbox
-    validate with harness
-    if pass → write output
-    else → return error report
+    run_pipeline(input_file, target_ontology):
+    load raw data (Layer 1)
+    profile schema attributes (Layer 2)
+    call LLM mapping engine to generate IR Specification (Layer 4)
+    validate IR topology via Harness Pre-check (Layer 5 Phase 1)
+    if fail → reject IR and return compilation error
+    compile IR and execute via Deterministic Compiler (Layer 6)
+    validate output data via Harness Post-check (Layer 5 Phase 2)
+    if pass → write to SQLite/CSV (Layer 8)
+    else → route anomalous records to Quarantine DB for Human Review (Layer 7)
 ```
 
 ---
