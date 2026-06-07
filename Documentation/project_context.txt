@@ -1,0 +1,330 @@
+# 📌 ENTERPRISE DATA COMPILER — AI CODING CONTEXT PROMPT
+
+---
+
+## 🧠 PROJECT DEFINITION (IMPORTANT)
+
+You are building an **Enterprise Data Compiler System**.
+
+The system transforms **messy enterprise data (CSV/Excel)** into **structured business models** using:
+
+* LLM-generated transformation logic
+* deterministic validation layer (Harness)
+* sandbox execution
+
+This is NOT a chatbot, NOT an agent system.
+
+It is a **data transformation compiler system**.
+
+---
+
+## 🎯 CORE OBJECTIVE
+
+Implement an end-to-end pipeline:
+
+```text id="core_flow"
+Raw CSV/Excel
+    ↓
+Schema Profiling Layer
+    ↓
+LLM Mapping Engine (generate transformation logic)
+    ↓
+Python transformation function execution
+    ↓
+Harness Validation (strict rules + stats)
+    ↓
+Sandbox execution
+    ↓
+Human review output
+    ↓
+SQLite structured output
+```
+
+---
+
+## ⚠️ IMPORTANT DESIGN CONSTRAINTS
+
+1. AI MUST NOT directly modify database
+2. AI ONLY generates transformation logic (Python code or mapping JSON)
+3. All AI outputs MUST be validated by Harness before execution
+4. System must be deterministic and auditable
+5. No multi-agent system, no autonomous planning loops
+
+---
+
+## 🧱 SYSTEM ARCHITECTURE (8 LAYERS)
+
+You MUST implement all layers as separate modules.
+
+---
+
+### LAYER 1 — CONNECTORS
+
+Purpose:
+Load raw enterprise data.
+
+Support:
+
+* CSV
+* Excel
+
+Output:
+
+* pandas DataFrame
+
+---
+
+### LAYER 2 — SCHEMA PROFILER
+
+Purpose:
+Analyze dataset structure.
+
+Output schema profile JSON:
+
+```json
+{
+  "fields": {
+    "amount": {
+      "type": "number",
+      "null_ratio": 0.01,
+      "min": -10,
+      "max": 1000
+    }
+  }
+}
+```
+
+---
+
+### LAYER 3 — BUSINESS ONTOLOGY
+
+Purpose:
+Define target structured business schema.
+
+Example:
+
+```json
+Customer {
+  customer_id: string,
+  customer_name: string,
+  phone: string
+}
+```
+
+This is STATIC in MVP.
+
+No graph DB required.
+
+---
+
+### LAYER 4 — LLM MAPPING ENGINE (CRITICAL)
+
+Input:
+
+* source schema
+* target ontology
+
+Output:
+
+STRICT JSON mapping OR python transform function.
+
+Example output:
+
+```json
+{
+  "cust_no": "customer_id",
+  "name": "customer_name"
+}
+```
+
+OR
+
+```python
+def transform(row):
+    return {
+        "customer_id": row["cust_no"],
+        "customer_name": row["name"]
+    }
+```
+
+---
+
+### LAYER 5 — HARNESS VALIDATION (CRITICAL CORE)
+
+This is the most important safety layer.
+
+It MUST implement:
+
+#### 5.1 Schema validation
+
+* missing fields
+* wrong types
+
+#### 5.2 Business rules validation
+
+Example rules:
+
+* amount >= 0
+* dates not in future
+
+#### 5.3 Referential integrity checks
+
+* foreign keys must exist
+
+#### 5.4 Statistical validation
+
+* sum(before) ≈ sum(after)
+* row count consistency
+
+Output:
+
+```json
+{
+  "status": "PASS | FAIL",
+  "errors": [],
+  "metrics": {}
+}
+```
+
+---
+
+### LAYER 6 — SANDBOX EXECUTION
+
+Purpose:
+Safely execute AI-generated transformation code.
+
+Constraints:
+
+* MUST run in isolated Python environment
+* NO system access
+* NO file system write outside project scope
+
+Use:
+
+* subprocess OR restricted python runtime
+
+---
+
+### LAYER 7 — HUMAN REVIEW MODULE
+
+Purpose:
+Expose validation results.
+
+Output:
+
+* mapping result
+* validation report
+* execution summary
+
+Allow:
+
+* approve
+* reject
+* modify rules
+
+---
+
+### LAYER 8 — OUTPUT LAYER
+
+Write clean structured data to:
+
+* SQLite database (primary)
+* CSV export (secondary)
+
+---
+
+## 🔁 END-TO-END PIPELINE RULE
+
+The system MUST implement a single orchestrator:
+
+```text
+run_pipeline(input_file):
+    load data
+    profile schema
+    call LLM mapping engine
+    generate transformation function
+    execute in sandbox
+    validate with harness
+    if pass → write output
+    else → return error report
+```
+
+---
+
+## 🧠 CORE DESIGN PRINCIPLE
+
+This system is NOT:
+
+* agent system
+* chatbot
+* autonomous AI
+
+It IS:
+
+> A deterministic compiler that turns messy data into structured business models using AI-generated transformation logic + strict validation.
+
+---
+
+## 📦 REQUIRED PROJECT STRUCTURE
+
+Generate code with this structure:
+
+```
+app/
+  connectors/
+  schema/
+  ontology/
+  llm/
+  harness/
+  runtime/
+  review/
+  output/
+  pipeline/
+
+tests/
+demo/
+```
+
+---
+
+## 🧪 MVP SUCCESS CRITERIA
+
+System is considered working if:
+
+1. Can load messy CSV
+2. LLM generates valid mapping
+3. Transformation executes successfully
+4. Harness detects invalid cases
+5. Clean structured SQLite output is produced
+
+---
+
+## ❌ DO NOT IMPLEMENT
+
+* No multi-agent system
+* No AutoGPT style loops
+* No Kafka / Spark / Airflow
+* No distributed systems
+* No graph database
+* No continuous training
+
+---
+
+## 🧠 FINAL INSTRUCTION TO AI CODER
+
+You are implementing a **production-style prototype**, not a toy script.
+
+Code must be:
+
+* modular
+* testable
+* extensible
+* strictly layered
+
+Every layer must be separable and replaceable.
+
+---
+
+# END OF SPEC
+
+---

@@ -1,0 +1,65 @@
+enterprise-data-compiler/
+│
+├── README.md
+├── requirements.txt
+├── .env
+├── docker/
+│   └── sandbox.Dockerfile
+│
+├── app/
+│   ├── main.py                 # entry point (CLI or API)
+│
+│   ├── config/
+│   │   └── settings.py
+│
+│   ├── connectors/            # Layer 1
+│   │   ├── base.py
+│   │   ├── csv_connector.py
+│   │   └── excel_connector.py
+│
+│   ├── schema/                # Layer 2
+│   │   ├── profiler.py
+│   │   └── schema_model.py
+│
+│   ├── ontology/              # Layer 3
+│   │   ├── business_schema.py
+│   │   └── ontology_registry.json
+│
+│   ├── llm/                   # Layer 4 (核心AI)
+│   │   ├── mapper.py
+│   │   ├── prompt_templates.py
+│   │   └── llm_client.py
+│
+│   ├── harness/               # Layer 5 (核心防线)
+│   │   ├── schema_validator.py
+│   │   ├── business_rules.py
+│   │   ├── referential_checker.py
+│   │   ├── statistical_checker.py
+│   │   └── report.py
+│
+│   ├── runtime/               # Layer 6
+│   │   ├── executor.py
+│   │   └── sandbox_runner.py
+│
+│   ├── review/                # Layer 7
+│   │   ├── review_engine.py
+│   │   └── ui_mock.py
+│
+│   ├── output/                # Layer 8
+│   │   ├── exporter.py
+│   │   └── sqlite_writer.py
+│
+│   ├── pipeline/
+│   │   └── orchestrator.py   # glue of all 8 layers
+│
+│
+├── tests/
+│   ├── test_mapping.py
+│   ├── test_harness.py
+│   └── sample_data/
+│       ├── messy.csv
+│       └── target_schema.json
+│
+└── demo/
+    ├── run_demo.py
+    └── demo_dataset.csv
