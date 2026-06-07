@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # ==========================================
 # 1. System Instruction
@@ -8,11 +8,15 @@ COMPILER_SYSTEM_INSTRUCTION = """
 You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibility is to generate a deterministic Transformation Intermediate Representation (IR) mapping graph.
 
 【CRITICAL CONSTRAINTS - VIOLATION RESULTS IN SYSTEM CRASH】:
-1. You MUST NOT output any explanations, markdown formatting, or thought processes. Output ONLY the strict JSON object.
-2. You MUST NOT generate any Python, SQL, or execution scripts.
-3. You are ONLY allowed to use the operators explicitly defined in the schema (e.g., COPY, CONCAT, ADD, SUBTRACT, MULTIPLY, DIVIDE, TO_FLOAT, TO_INT).
-4. Topology Rule: Your output mapping MUST form a valid Directed Acyclic Graph (DAG). Do NOT create circular dependencies between 'intermediate_steps'.
-5. Type Safety: Ensure input arguments for mathematical operators (ADD, SUBTRACT, etc.) are logically castable to numeric types.
+1. Output ONLY the strict JSON object. No markdown, no explanations.
+2. NO Python, SQL, or executable scripts.
+3. Use ONLY explicitly defined operators (COPY, CONCAT, ADD, SUBTRACT, MULTIPLY, DIVIDE, TO_FLOAT, TO_INT).
+4. Topology Rule: Output MUST form a valid Directed Acyclic Graph (DAG) without circular dependencies.
+
+【SEMANTIC & CONTRACT AWARENESS (NEW)】:
+5. Semantic Fingerprints: You MUST read the 'fingerprint', 'samples', and 'inferred_semantic_type' in the Source Schema to resolve column name ambiguities.
+6. Relationship Exploitation: If the Source Schema provides 'relationships' (e.g., formula: x * 0.06), use this mathematical proof to construct your ADD/MULTIPLY intermediate steps.
+7. ODCS Contract Compliance: Review the Target Ontology's 'odcs_contracts'. Ensure your IR graph anticipates these rules (e.g., if a target field requires 'non_negative', structure your operators to avoid negative yields).
 """
 
 # ==========================================
@@ -21,23 +25,23 @@ You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibi
 def build_mapping_prompt(
     source_schema: Dict[str, Any], 
     target_ontology: Dict[str, Any],
-    mapping_registry_context: Optional[Dict[str, str]] = None
+    mapping_hints: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """Build the user data payload for triggering IR reasoning"""
     
     prompt_parts = [
         "Align the incoming Source Schema to the Target Business Ontology by creating an intermediate execution graph.",
-        "\n【Incoming Source Schema】:",
+        "\n【Incoming Source Schema (Enhanced with Semantic Profiling)】:",
         json.dumps(source_schema, indent=2),
-        "\n【Target Business Ontology】:",
+        "\n【Target Business Ontology & ODCS Contracts】:",
         json.dumps(target_ontology, indent=2)
     ]
 
-    if mapping_registry_context:
+    if mapping_hints:
         prompt_parts.extend([
-            "\n【Historical Mapping Hints】:",
-            "The following are high-confidence mappings from past integrations. Use them as strong hints, but DO NOT force them if data types severely contradict the target ontology:",
-            json.dumps(mapping_registry_context, indent=2)
+            "\n【Historical Mapping Recall (Vector-like Search Results)】:",
+            "The following are high-confidence historical mappings recalled from the Registry. Prioritize these mappings if the semantic fingerprints align:",
+            json.dumps(mapping_hints, indent=2)
         ])
 
     return "\n".join(prompt_parts)

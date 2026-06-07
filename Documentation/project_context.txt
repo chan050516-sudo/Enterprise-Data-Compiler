@@ -22,21 +22,19 @@ Implement an end-to-end pipeline:
 ```text id="core_flow"
 Raw CSV/Excel
     ↓
-Schema Profiling Layer
+Layer 2: Semantic Profiling Layer (Metadata + Fingerprints + Relationships)
+    ↓  ← [Inject Mapping Registry History]
+Layer 4: LLM Mapping Engine (generates structured IR JSON)
     ↓
-LLM Mapping Engine (generate structured IR JSON)
+Layer 5-P1: IR Topology Validator (DAG Pre-check)
     ↓
-IR Validator (Harness Pre-check)
+Layer 6: Deterministic Compiler Runtime (Vectorized Pandas)
     ↓
-Native Compiler Execution (Vectorized Pandas Operators)
+Layer 5-P2: ODCS Contract Enforcer (Row-level rules + Dataset-level asserts)
     ↓
-Harness Validation (strict rules + stats)
+Human Review Output
     ↓
-Sandbox execution
-    ↓
-Human review output
-    ↓
-SQLite structured output
+Split Output: Clean Data (to SQLite) / Quarantined Data (to Review)
 ```
 
 ---
@@ -74,51 +72,44 @@ Output:
 
 ---
 
-### LAYER 2 — SCHEMA PROFILER
-
-Purpose:
-Analyze dataset structure.
-
-Output schema profile JSON:
-
-```json
+### LAYER 2 — SEMANTIC PROFILER
+Purpose: Analyze dataset structure, extract data fingerprints, and discover column relationships to eliminate semantic ambiguity.
+Output schema profile JSON (Example):
 {
   "fields": {
-    "amount": {
-      "type": "number",
-      "null_ratio": 0.01,
-      "min": -10,
-      "max": 1000
+    "gross_sales": {
+      "logical_type": "numeric",
+      "null_ratio": 0.0,
+      "fingerprint": {
+        "min": 0.0,
+        "max": 15000.0,
+        "samples": [1050.0, 320.5]
+      }
+    },
+    "tax_amount": {
+      "relationships": [
+        {"with": "gross_sales", "type": "linear", "formula": "x * 0.06"}
+      ]
     }
   }
 }
-```
 
 ---
 
-### LAYER 3 — BUSINESS ONTOLOGY
-
-Purpose:
-Define target structured business schema.
-
-Example:
-
-```json
-Customer {
-  customer_id: string,
-  customer_name: string,
-  phone: string
-}
-```
-
-This is STATIC in MVP.
-
-No graph DB required.
+### LAYER 3 — BUSINESS ONTOLOGY & CONTRACTS
+Purpose: Define target structured business schema AND strict ODCS (Open Data Contract Standard) validation rules.
+Structure: 
+- Fields definitions (logical types)
+- ODCS Contracts (Row-level rules like unique/pattern, and Dataset-level rules like volume conservation).
+*Also acts as the host for the Mapping Registry (Historical mapping memory).*
 
 ---
 
 ### LAYER 4 — LLM MAPPING ENGINE (CRITICAL)
-Input: Source schema, target ontology. 
+Input: 
+1. Semantic Profile (from Layer 2)
+2. Target Ontology & ODCS Contracts (from Layer 3)
+3. Historical Mapping Hints (from Mapping Registry)
 Output: Strict Transformation IR (Intermediate Representation) JSON.  
 - Must specify target fields, trusted operations (COPY, CONCAT, ADD, etc.), and typed input arguments (COLUMN_REF or LITERAL).
 - Absolutely no code blocks or dynamic expressions allowed.
@@ -127,8 +118,8 @@ Output: Strict Transformation IR (Intermediate Representation) JSON.
 
 ### LAYER 5 — HARNESS VALIDATION (SAFETY GATE)
 This layer acts as a two-phase gateway:
-- Phase 1 (Pre-execution Topology Check): Validates the LLM-generated IR against the target ontology fields and source schema column names before compilation. Catches field hallucinations or invalid operator arguments.
-- Phase 2 (Post-execution Data Check): ODCS Enforcer validates the compiled output DataFrame against deterministic business rules (e.g., non-negative constraints) and statistical metrics (e.g., row count/sum consistency).  
+- Phase 1 (Pre-check): IR Topology Validator (DAG cycle detection).
+- Phase 2 (Post-check): ODCS Contract Enforcer. A vectorized engine that reads the Layer 3 ODCS Contracts and applies them to the compiled DataFrame. Employs severity levels (Error vs. Warning) and tolerance thresholds for intelligent quarantine routing.
 
 ---
 

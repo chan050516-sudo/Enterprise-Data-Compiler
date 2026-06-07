@@ -19,9 +19,8 @@ class CSVConnector(BaseConnector):
             self._data = pd.read_csv(
                 self.source_path, 
                 encoding=encoding, 
-                delimiter=delimiter,
-                dtype=str   # Initially considered all data as str
-            )
+                delimiter=delimiter
+            ).convert_dtypes()
             return self._data
         except Exception as e:
             raise RuntimeError(f"Failed to read CSV data: {str(e)}")
