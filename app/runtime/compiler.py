@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 from app.schema.ir_model import AdvancedTransformationIR, IRNode, IRArgument
 
@@ -63,14 +63,47 @@ class IRCompiler:
             raise NotImplementedError(f"Operator {op} is not supported by runtime compiler.")
 
         return res
+    
+    def _topological_sort(self, steps: Dict[str, IRNode]) -> List[str]:
+        """Kahn's Algorithm Topological Sorting, decide the sequence of operations of the compiler"""
+        in_degree = {name: 0 for name in steps.keys()}
+        adj_list = {name: [] for name in steps.keys()}
+
+        # Generate adjacent list and in degree list
+        for step_name, node in steps.items():
+            for arg in node.inputs:
+                if arg.type == "STEP_REF":
+                    if arg.value in steps:
+                        adj_list[arg.value].append(step_name)
+                        in_degree[step_name] += 1
+
+        # Find out starting node with degree=0
+        queue = [name for name, deg in in_degree.items() if deg == 0]
+        sorted_steps = []
+
+        while queue:
+            current = queue.pop(0)
+            sorted_steps.append(current)
+            for neighbor in adj_list[current]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        if len(sorted_steps) != len(steps):
+            raise CompilationError("Topological sort failed. Hidden cycle detected during compilation.")
+
+        return sorted_steps
 
     def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR) -> pd.DataFrame:
         logger.info("Initializing Native Compilation Context...")
         runtime_context: Dict[str, pd.Series] = {}
         output_df = pd.DataFrame(index=source_df.index)
 
+        execution_order = self._topological_sort(ir.intermediate_steps)
+
         # 1. Compile and execute calculation steps
-        for step_name, node in ir.intermediate_steps.items():
+        for step_name in execution_order:
+            node = ir.intermediate_steps[step_name]
             logger.debug(f"Compiling intermediate virtual register: {step_name}")
             runtime_context[step_name] = self._execute_node(node, source_df, runtime_context)
 

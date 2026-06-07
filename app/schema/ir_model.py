@@ -15,13 +15,6 @@ class IRNode(BaseModel):
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"
 
-    @validator('operation')
-    def validate_operation(cls, v):
-        allowed_ops = {"COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT"}
-        if v not in allowed_ops:
-            raise ValueError(f"Operator '{v}' not in trusted registry.")
-        return v
-
 class AdvancedTransformationIR(BaseModel):
     """
     Transformation IR Syntax Tree Contract
