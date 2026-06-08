@@ -60,6 +60,12 @@ class IRCompiler:
                 res = eval_env.eval(formula)
             except Exception as e:
                 raise CompilationError(f"Expression evaluation failed for '{formula}': {str(e)}")
+            
+        elif op == "UNION":
+            if len(resolved_args) < 2:
+                raise ValueError("UNION requires at least two TABLE_REF or DataFrame inputs.")
+            # 垂直拼接，去重（或不去重，取决于业务）
+            res = pd.concat(resolved_args, ignore_index=True).drop_duplicates()
 
         elif op == "JOIN":
             # 确定性表关联
@@ -110,10 +116,6 @@ class IRCompiler:
             numerator = pd.to_numeric(resolved_args[0], errors='coerce').fillna(0)
             denominator = pd.to_numeric(resolved_args[1], errors='coerce').fillna(1) # Impurities default to convert to 1，avoid system collapse
             res = numerator / denominator.replace(0, 1)   # Fallback
-        elif op == "DIVIDE":
-            denominator = pd.to_numeric(resolved_args[1], errors='coerce')
-            # Divide by 0 condition handling
-            res = pd.to_numeric(resolved_args[0], errors='coerce') / denominator.replace(0, np.nan)
         elif op == "TO_FLOAT":
             res = pd.to_numeric(resolved_args[0], errors='coerce')
         elif op == "TO_INT":
