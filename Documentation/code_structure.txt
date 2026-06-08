@@ -31,7 +31,7 @@ enterprise-data-compiler/
 │
 │   ├── harness/               # Layer 5: 两阶段核心安全防线 
 │   │   ├── ir_validator.py    # 【Phase 1】IR 静态拓扑校验器（拦截字段幻觉与未知算子）
-│   │   ├── odcs_enforcer.py   # 【Phase 2】 
+│   │   ├── trust_engine.py   # 【Phase 2】 
 │   │   └── report.py          # 编译质量综合评估报告 
 │
 │   ├── runtime/               # Layer 6: 本地确定性数据编译器 
