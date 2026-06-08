@@ -12,7 +12,7 @@ class IRNode(BaseModel):
     No longer single source, but operation + inputs
     """
     operation: Literal["COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
-                       "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP"]
+                       "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY"]
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"
     options: Optional[Dict[str, Any]] = None

@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 import logging
 from app.schema.ir_model import AdvancedTransformationIR, IRNode, IRArgument
 
@@ -11,13 +11,13 @@ class CompilationError(Exception):
 
 class IRCompiler:
     """
-    Layer 6: Determinsitic IR Compiler
+    Layer 6: Determinsitic IR Compiler (Upgraded with Relational Algebra & AST Eval)
     Based on defined operator lists, parse IR as Pandas into vectorization operation
     """
     def __init__(self):
         pass
 
-    def _resolve_arg(self, arg: IRArgument, source_df: pd.DataFrame, context: Dict[str, pd.Series]) -> pd.Series:
+    def _resolve_arg(self, arg: IRArgument, source_df: pd.DataFrame, context: Dict[str, Union[pd.Series, pd.DataFrame]], extra_tables: Dict[str, pd.DataFrame] = None) -> Union[pd.Series, pd.DataFrame, Any]:
         if arg.type == "COLUMN_REF":
             if arg.value not in source_df.columns:
                 raise ValueError(f"Compile Error: Source column '{arg.value}' missing.")
@@ -29,19 +29,66 @@ class IRCompiler:
         elif arg.type == "LITERAL":
             # Convert into Pandas Series to ease vectors computations
             return pd.Series(arg.value, index=source_df.index)
+        elif arg.type == "TABLE_REF":
+            if arg.value == "source":
+                return source_df
+            elif extra_tables and arg.value in extra_tables:
+                return extra_tables[arg.value]
+            raise ValueError(f"Compile Error: External table '{arg.value}' not found in runtime.")
         raise ValueError(f"Unsupported argument type: {arg.type}")
 
-    def _execute_node(self, node: IRNode, source_df: pd.DataFrame, context: Dict[str, pd.Series]) -> pd.Series:
+    def _execute_node(self, node: IRNode, source_df: pd.DataFrame, context: Dict[str, Union[pd.Series, pd.DataFrame]], extra_tables: Dict[str, pd.DataFrame] = None) -> Union[pd.Series, pd.DataFrame]:
         # Dynamically parse arguments list
-        resolved_args = [self._resolve_arg(arg, source_df, context) for arg in node.inputs]
+        resolved_args = [self._resolve_arg(arg, source_df, context, extra_tables) for arg in node.inputs]
         op = node.operation
 
         # ----------------------------------------------------
-        # 1. 基础算子 (Math & Strings)
+        # 1. 高阶算子 (Relational Ops & Expressions) - [本次重点新增]
         # ----------------------------------------------------
-        if op == "COPY":
-            # Strip for avoid regex failure
-            series = resolved_args[0]
+        if op == "COMPUTE_EXPR":
+            # 极速、安全的表达式计算（防注入），例如: "gross_amount - discount_amount * tax_rate"
+            formula = node.options.get("formula")
+            if not formula:
+                raise ValueError("COMPUTE_EXPR requires a 'formula' in options.")
+            try:
+                # 建立安全沙盒：将 source_df 和之前的所有中间步骤(Series)合并作为求值环境
+                eval_env = source_df.copy()
+                for k, v in context.items():
+                    if isinstance(v, pd.Series):
+                        eval_env[k] = v
+                # df.eval 底层调用 C++ NumExpr，绝对安全且速度极快
+                res = eval_env.eval(formula)
+            except Exception as e:
+                raise CompilationError(f"Expression evaluation failed for '{formula}': {str(e)}")
+
+        elif op == "JOIN":
+            # 确定性表关联
+            if len(resolved_args) < 2:
+                raise ValueError("JOIN requires at least two TABLE_REF inputs.")
+            left_df = resolved_args[0]
+            right_df = resolved_args[1]
+            how = node.options.get("how", "left")
+            on = node.options.get("on")
+            left_on = node.options.get("left_on")
+            right_on = node.options.get("right_on")
+            # 执行底层 merge
+            res = pd.merge(left_df, right_df, how=how, on=on, left_on=left_on, right_on=right_on)
+
+        elif op == "GROUP_BY":
+            df_to_group = resolved_args[0]
+            by_cols = node.options.get("by")
+            agg_dict = node.options.get("agg")  # e.g., {"revenue": "sum"}
+            res = df_to_group.groupby(by_cols).agg(agg_dict).reset_index()
+
+        # ----------------------------------------------------
+        # 2. 基础与规范化算子 (保持原样，增加对 DataFrame 抽列的支持)
+        # ----------------------------------------------------
+        elif op == "COPY":
+            # [升级] 允许从一个 DataFrame(比如 JOIN 后的表) 中 COPY 出特定列
+            if isinstance(resolved_args[0], pd.DataFrame) and node.options and "column" in node.options:
+                series = resolved_args[0][node.options["column"]]
+            else:
+                series = resolved_args[0]
             if pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
                 res = series.astype(str).str.strip().replace(['nan', 'None', 'N/A', ''], np.nan)
             else:
@@ -73,7 +120,7 @@ class IRCompiler:
             res = pd.to_numeric(resolved_args[0], errors='coerce').fillna(0).astype(int)
         
         # ----------------------------------------------------
-        # 2. 规范化算子 (Canonicalization - 解决格式噪声的核心)
+        # 3. 规范化算子 (Canonicalization - 解决格式噪声的核心)
         # ----------------------------------------------------
         elif op == "PARSE_DATE":
             # 将类似 "2026/06/08", "Jun 8 2026" 强制转换为标准 ISO8601 格式
@@ -126,10 +173,10 @@ class IRCompiler:
 
         return sorted_steps
 
-    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None) -> pd.DataFrame:
-        logger.info("Initializing Native Compilation & Canonicalization Context...")
-        runtime_context: Dict[str, pd.Series] = {}
-        output_df = pd.DataFrame(index=source_df.index)
+    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None, extra_tables: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
+        logger.info("Initializing Native Compilation & Relational Context...")
+        runtime_context: Dict[str, Union[pd.Series, pd.DataFrame]] = {}
+        output_df = pd.DataFrame()
 
         execution_order = self._topological_sort(ir.intermediate_steps)
 
@@ -137,14 +184,14 @@ class IRCompiler:
         for step_name in execution_order:
             node = ir.intermediate_steps[step_name]
             logger.debug(f"Compiling intermediate virtual register: {step_name}")
-            runtime_context[step_name] = self._execute_node(node, source_df, runtime_context)
+            runtime_context[step_name] = self._execute_node(node, source_df, runtime_context, extra_tables)
 
         ontology_fields = target_ontology.get("fields", {}) if target_ontology else {}
 
         # 2. Compile and generate final target Ontology column
         for target_field, node in ir.output_mappings.items():
             logger.info(f"Compiling target business field: {target_field}")
-            final_series = self._execute_node(node, source_df, runtime_context)
+            final_series = self._execute_node(node, source_df, runtime_context, extra_tables)
             
             # --- 业务语义注入 (Policy Imputation) ---
             field_config = ontology_fields.get(target_field, {})

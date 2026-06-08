@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class PipelineOrchestrator:
     """
-    Global Orchestration Hub: 驱动 8 层数据编译流水线，包含 MAPE-K 自愈循环。
+    Global Orchestration Hub: 驱动 8 层数据编译流水线，包含带统计学视觉的 MAPE-K 自愈循环。
     """
     def __init__(self, llm_client):
         self.mapper = SemanticMapper(llm_client)
@@ -33,10 +33,10 @@ class PipelineOrchestrator:
         """
         logger.info("--- 🚀 Starting Autonomous Data Compilation Pipeline ---")
         
-        # Layer 2: Semantic Profiling (自带采样防 OOM 与关系推断)
+        # Layer 2: Semantic Profiling 
         logger.info("[Layer 2] Extracting Semantic Profile & Data Fingerprints...")
         source_schema = SemanticProfiler.profile(source_df)
-        total_rows = len(source_df)
+        total_source_rows = len(source_df)
         
         failure_feedback = None # 自愈反馈上下文
         
@@ -45,24 +45,23 @@ class PipelineOrchestrator:
             if is_healing_run:
                 logger.warning(f"--- 🛠️ Initiating Self-Healing Loop (Attempt {attempt}/{max_retries}) ---")
             
-            # Layer 4: LLM IR Generation (注入失败反馈实现自我纠偏)
+            # Layer 4: LLM IR Generation 
             logger.info("[Layer 4] Semantic Mapper generating/patching Transformation IR...")
             ir_spec = self.mapper.generate_ir(
                 source_schema=source_schema, 
                 target_ontology=target_ontology,
-                # 注意：如果你的 mapper.py 目前没加 failure_feedback 参数，可以暂时传参给 mapping_hints，
-                # 或者去 mapper.py 中补上 failure_feedback 传入 prompt 的逻辑
+                mapping_hints=[failure_feedback] if failure_feedback else None # 巧妙复用 hint 接口注入报错现场
             )
             
             # Layer 5-P1: 拓扑安全校验
             logger.info("[Layer 5-P1] Validating IR static topology safety...")
             IRValidator.validate_topology(ir_spec, list(source_df.columns), target_ontology)
             
-            # Layer 6: 确定性编译与规范化 (Canonicalization)
+            # Layer 6: 确定性编译与规范化
             logger.info("[Layer 6] Executing deterministic vectorized compilation...")
             compiled_df = self.compiler.compile(source_df, ir_spec, target_ontology)
             
-            # Layer 5-P2: 信任引擎评估 (获取 TrustAuditReport 对象)
+            # Layer 5-P2: 信任引擎评估
             logger.info("[Layer 5-P2] Evaluating Trust Score and ODCS Contracts...")
             audit_report: TrustAuditReport = self.enforcer.evaluate(
                 compiled_df=compiled_df, 
@@ -74,7 +73,7 @@ class PipelineOrchestrator:
             if audit_report.dataset_errors:
                 raise RuntimeError(f"Pipeline Halted: Critical Dataset Failures detected: {audit_report.dataset_errors}")
                 
-            # --- 自治路由决策树 (Autonomous Decision Router) ---
+            # --- 自治路由决策树 ---
             decision = audit_report.routing_decision
             
             if decision == "PASS":
@@ -83,57 +82,89 @@ class PipelineOrchestrator:
                 return clean_df, quarantine_df, audit_report
                 
             elif decision == "AUTO_HEAL" and attempt < max_retries:
-                # 触发自愈飞轮，提取错误现场
                 clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
-                failure_feedback = self._extract_failure_context(quarantine_df, audit_report)
-                logger.warning(f"⚠️ Trust Score is {audit_report.trust_score:.2f}. Feeding {audit_report.quarantined_rows_count} anomaly records back to Mapper...")
+                # 【核心进化】：传入 total_source_rows，提取高密度统计学画像
+                failure_feedback = self._extract_failure_context(quarantine_df, audit_report, total_source_rows)
+                logger.warning(f"⚠️ Trust Score is {audit_report.trust_score:.2f}. Feeding statistical anomaly profile back to LLM...")
                 continue
                 
             else:
-                # 放弃治疗 (QUARANTINE) 或 重试次数耗尽
                 reason = "Max retries reached" if attempt >= max_retries else "Low Trust Score"
                 logger.error(f"❌ Self-healing aborted ({reason}). Routing to Quarantine Review.")
                 break
 
-        # 最终硬切片
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
         logger.info(f"--- Compilation Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
         return clean_df, quarantine_df, audit_report
 
     def _route_data(self, compiled_df: pd.DataFrame, audit_report: TrustAuditReport) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """执行物理切片，强类型属性读取"""
         quarantine_indices = audit_report.quarantine_indices
-        
         if not quarantine_indices:
             return compiled_df, pd.DataFrame(columns=compiled_df.columns)
             
         is_quarantined = compiled_df.index.isin(quarantine_indices)
-        
         quarantine_df = compiled_df[is_quarantined].copy()
         clean_df = compiled_df[~is_quarantined].copy()
-        
         return clean_df, quarantine_df
 
-    def _extract_failure_context(self, quarantine_df: pd.DataFrame, audit_report: TrustAuditReport) -> Dict[str, Any]:
-        """提取高密度的错误现场，供 LLM 修复分析使用"""
-        feedback = {"failed_targets": []}
+    # ==========================================
+    # 核心升级：全景错误画像提取器 (Holistic Failure Profiler)
+    # ==========================================
+    def _extract_failure_context(self, quarantine_df: pd.DataFrame, audit_report: TrustAuditReport, total_rows: int) -> Dict[str, Any]:
+        """不再只传零星样本，而是生成包含 污染率、统计特征、高频样本 的结构化画像"""
+        feedback = {"AUTONOMOUS_REMEDIATION_REQUIRED": True, "failed_targets": []}
         
-        # 通过 Pydantic 属性访问 (error.column / error.rule)
         for error in audit_report.errors:
             col_name = error.column
             rule_violated = error.rule
+            affected_rows = error.affected_rows
             
-            messy_samples = []
-            if col_name and col_name in quarantine_df.columns:
-                valid_samples = quarantine_df[col_name].dropna()
-                if not valid_samples.empty:
-                    messy_samples = valid_samples.sample(min(5, len(valid_samples))).tolist()
-
-            feedback["failed_targets"].append({
+            # 构建基础画像骨架
+            error_profile = {
                 "target_column": col_name,
                 "violated_odcs_rule": rule_violated,
-                "messy_samples_causing_failure": messy_samples,
-                "affected_rows": error.affected_rows
-            })
+                "error_statistics": {
+                    "total_failed_rows": affected_rows,
+                    "failure_rate": f"{(affected_rows / total_rows):.2%}" if total_rows > 0 else "100%"
+                }
+            }
+            
+            if col_name and col_name in quarantine_df.columns:
+                dirty_series = quarantine_df[col_name]
+                valid_samples = dirty_series.dropna()
+                
+                if not valid_samples.empty:
+                    # 1. 提取最具代表性的 Top 5 脏数据（用 value_counts 抓取高频样本，而非随机取样）
+                    top_samples = valid_samples.value_counts().head(5).index.tolist()
+                    error_profile["error_statistics"]["top_messy_samples"] = top_samples
+                    
+                    # 2. 启发式特征提取 (Heuristic Traits Analysis)
+                    traits = []
+                    str_series = valid_samples.astype(str)
+                    
+                    # 探测大小写异常
+                    if str_series.str.islower().all():
+                        traits.append("All failed strings are entirely lowercase. Consider TO_UPPER.")
+                    elif str_series.str.isupper().all():
+                        traits.append("All failed strings are entirely uppercase. Consider TO_LOWER.")
+                        
+                    # 探测首尾隐形字符/空格 (ERP 常见的脏数据来源)
+                    if str_series.str.contains(r'^\s|\s$', regex=True).any():
+                        traits.append("Contains leading or trailing whitespaces. Consider COPY with string stripping or FUZZY_MAP.")
+                    
+                    # 探测伪数字
+                    if str_series.str.isnumeric().all():
+                        traits.append("All failed values are purely numeric but stored as strings.")
+                        
+                    # 统计平均长度，帮助大模型判断是否发生了截断
+                    avg_len = str_series.str.len().mean()
+                    traits.append(f"Average string length of failed samples is {avg_len:.1f}.")
+                    
+                    if traits:
+                        error_profile["error_statistics"]["common_traits"] = " | ".join(traits)
+                else:
+                    error_profile["error_statistics"]["common_traits"] = "All failed values are completely NULL or NaN."
+                    
+            feedback["failed_targets"].append(error_profile)
             
         return feedback
