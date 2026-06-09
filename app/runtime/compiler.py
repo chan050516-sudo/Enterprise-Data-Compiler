@@ -87,6 +87,169 @@ class IRCompiler:
             res = df_to_group.groupby(by_cols).agg(agg_dict).reset_index()
 
         # ----------------------------------------------------
+        # 结构干预算子 (Structural Ops - 应对汇总行与 1NF 破裂)
+        # ----------------------------------------------------
+        elif op == "FILTER":
+            df_to_filter = resolved_args[0]
+            condition = node.options.get("condition")
+            if not condition:
+                raise ValueError("FILTER requires a 'condition' in options.")
+            try:
+                # 使用底层 C++ 引擎高速过滤，例如 "amount > 0 and customer_name == customer_name"
+                res = df_to_filter.query(condition).copy()
+            except Exception as e:
+                raise CompilationError(f"FILTER evaluation failed for condition '{condition}': {str(e)}")
+
+        elif op == "EXPLODE":
+            df_to_explode = resolved_args[0]
+            col = node.options.get("column")
+            delimiter = node.options.get("delimiter", ",")
+            if not col or col not in df_to_explode.columns:
+                raise ValueError(f"EXPLODE requires a valid 'column' in options. Got: {col}")
+            
+            res = df_to_explode.copy()
+            # 纯向量化分裂与降维展开，防空值雪崩
+            res[col] = res[col].astype(str).str.split(delimiter)
+            res = res.explode(col)
+            # 剥离多余空格，并将转换产生的 'nan' 恢复为真实空值
+            if pd.api.types.is_string_dtype(res[col]) or pd.api.types.is_object_dtype(res[col]):
+                res[col] = res[col].str.strip().replace(['nan', 'None', ''], np.nan)
+
+        # ----------------------------------------------------
+        # 窗口函数算子 (Window Operations - 解决时序与排行依赖)
+        # ----------------------------------------------------
+        elif op == "WINDOW_APPLY":
+            df_in = resolved_args[0].copy()
+            partition_by = node.options.get("partition_by", [])
+            order_by = node.options.get("order_by", [])
+            ascending = node.options.get("ascending", True)
+            func = node.options.get("function") # 支持: row_number, rank, dense_rank, sum, mean, cumulative_sum
+            target_col = node.options.get("target_column")
+            
+            if not func or not target_col:
+                raise ValueError("WINDOW_APPLY requires 'function' and 'target_column'.")
+                
+            # 为保证确定性，先执行全局排序
+            if order_by:
+                df_in = df_in.sort_values(by=partition_by + order_by, ascending=ascending)
+                
+            grouped = df_in.groupby(partition_by)[target_col] if partition_by else df_in[target_col]
+            
+            if func == "row_number":
+                res_series = df_in.groupby(partition_by).cumcount() + 1 if partition_by else pd.Series(range(1, len(df_in) + 1), index=df_in.index)
+            elif func == "rank":
+                res_series = grouped.rank(method='min', ascending=ascending)
+            elif func == "dense_rank":
+                res_series = grouped.rank(method='dense', ascending=ascending)
+            elif func in ["sum", "mean", "max", "min"]:
+                res_series = grouped.transform(func)
+            elif func == "cumulative_sum":
+                res_series = grouped.cumsum()
+            else:
+                raise NotImplementedError(f"Unsupported window function: {func}")
+                
+            # 必须利用原索引对齐恢复顺序，防止破坏外部拓扑的行对齐约束
+            res = res_series.sort_index()
+
+        # ----------------------------------------------------
+        # 条件分支算子 (Conditional Routing - 替代复杂的 IF-ELSE)
+        # ----------------------------------------------------
+        elif op == "CASE_WHEN":
+            df_in = resolved_args[0]
+            # 格式: [{"condition": "status == 'A'", "value": "100"}, {"condition": "status == 'B'", "value": "col_b"}]
+            cases = node.options.get("cases", [])
+            default_val = node.options.get("default", np.nan)
+            
+            conditions = []
+            choices = []
+            
+            try:
+                for case in cases:
+                    # 使用极其安全的 numexpr 引擎评估条件
+                    cond_mask = df_in.eval(case["condition"])
+                    conditions.append(cond_mask)
+                    
+                    val = case["value"]
+                    # 动态判断 value 是一个列引用还是静态字面量
+                    if isinstance(val, str) and val in df_in.columns:
+                        choices.append(df_in[val])
+                    else:
+                        choices.append(val)
+                
+                # 向量化多路分支计算 (等价于 SQL 的 CASE WHEN)
+                res = pd.Series(np.select(conditions, choices, default=default_val), index=df_in.index)
+            except Exception as e:
+                raise CompilationError(f"CASE_WHEN evaluation failed: {str(e)}")
+
+        # ----------------------------------------------------
+        # 结构重塑算子 (Data Reshaping - 解决反范式报表)
+        # ----------------------------------------------------
+        elif op == "PIVOT":
+            df_in = resolved_args[0]
+            index_cols = node.options.get("index")
+            columns_col = node.options.get("columns")
+            values_col = node.options.get("values")
+            aggfunc = node.options.get("aggfunc", "sum")
+            
+            # 行转列，并压平 MultiIndex
+            res = pd.pivot_table(df_in, index=index_cols, columns=columns_col, values=values_col, aggfunc=aggfunc).reset_index()
+            res.columns = [str(c) for c in res.columns]
+
+        elif op == "UNPIVOT":
+            df_in = resolved_args[0]
+            id_vars = node.options.get("id_vars")
+            value_vars = node.options.get("value_vars") # 可选，如果不填则融合所有剩余列
+            var_name = node.options.get("var_name", "variable")
+            value_name = node.options.get("value_name", "value")
+            
+            # 列转行 (Melt)
+            res = pd.melt(df_in, id_vars=id_vars, value_vars=value_vars, var_name=var_name, value_name=value_name)
+
+        # ----------------------------------------------------
+        # 排序与截断算子 (Sorting & Limiting)
+        # ----------------------------------------------------
+        elif op == "ORDER_BY":
+            df_in = resolved_args[0]
+            by_cols = node.options.get("by")
+            ascending = node.options.get("ascending", True)
+            res = df_in.sort_values(by=by_cols, ascending=ascending)
+            
+        elif op == "LIMIT":
+            df_in = resolved_args[0]
+            n = node.options.get("n", 100)
+            res = df_in.head(n)
+
+        # ----------------------------------------------------
+        # 实体消歧算子 (Unsupervised Entity Resolution)
+        # ----------------------------------------------------
+        elif op == "RESOLVE_ENTITIES":
+            import difflib
+            series = resolved_args[0]
+            threshold = node.options.get("similarity_threshold", 0.85)
+            
+            # 剔除空值后，统计词频。核心思想：高频词大概率是标准词（Canonical）
+            valid_series = series.dropna().astype(str)
+            val_counts = valid_series.value_counts()
+            unique_vals = val_counts.index.tolist()
+            
+            canonical_mapping = {}
+            processed = set()
+            
+            # 按频率从高到低遍历
+            for val in unique_vals:
+                if val in processed:
+                    continue
+                # 寻找与其相似的低频写法
+                matches = difflib.get_close_matches(val, unique_vals, n=len(unique_vals), cutoff=threshold)
+                for match in matches:
+                    if match not in processed:
+                        canonical_mapping[match] = val  # 统统向最高频的写法坍缩
+                        processed.add(match)
+                        
+            # 将清洗后的字典映射回原列，未匹配的保留原样
+            res = series.map(canonical_mapping).fillna(series)
+
+        # ----------------------------------------------------
         # 2. 基础与规范化算子 (保持原样，增加对 DataFrame 抽列的支持)
         # ----------------------------------------------------
         elif op == "COPY":

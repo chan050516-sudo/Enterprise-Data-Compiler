@@ -11,8 +11,20 @@ class IRNode(BaseModel):
     Node of Operator Graph (V2 N-to-1 architecture)
     No longer single source, but operation + inputs
     """
-    operation: Literal["COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
-                       "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY"]
+    operation: Literal[
+        # 基础算子
+        "COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
+        # 清洗与规范化算子
+        "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", 
+        # 实体消歧算子
+        "RESOLVE_ENTITIES",
+        # 关系代数与高阶表达算子
+        "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY", 
+        # 结构降级与多值分裂算子
+        "FILTER", "EXPLODE",
+        # 图灵完备级 SQL 算子
+        "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT"
+    ]
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"
     options: Optional[Dict[str, Any]] = None
