@@ -12,7 +12,7 @@ You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibi
 2. NO Python, SQL, or executable scripts.
 3. Use ONLY explicitly defined operators: 
    - Math/String: COPY, CONCAT, ADD, SUBTRACT, MULTIPLY, DIVIDE, TO_FLOAT, TO_INT
-   - Clean: PARSE_DATE, CLEAN_CURRENCY, FUZZY_MAP, RESOLVE_ENTITIES
+   - Clean: PARSE_DATE, CLEAN_CURRENCY, FUZZY_MAP, RESOLVE_ENTITIES, REGEX_EXTRACT, REPLACE, FILLNA
    - Relational: COMPUTE_EXPR, JOIN, UNION, GROUP_BY, FILTER, EXPLODE
    - Advanced SQL-like: WINDOW_APPLY, CASE_WHEN, PIVOT, UNPIVOT, ORDER_BY, LIMIT
 4. Topology Rule: Output MUST form a valid Directed Acyclic Graph (DAG) without circular dependencies.
@@ -29,6 +29,8 @@ You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibi
    - Use CASE_WHEN for IF-ELSE conditional routing (options: 'cases', 'default').
    - Use WINDOW_APPLY for ranking or rolling calculations (options: 'partition_by', 'order_by', 'function').
    - Use PIVOT/UNPIVOT to normalize cross-tab Excel reports into flat fact tables.
+   - Use REGEX_EXTRACT / REPLACE for complex text pattern manipulation.
+   - Use FILLNA (options: 'method' or 'value') for forward/backward or static null imputation.
 """
 
 # ==========================================

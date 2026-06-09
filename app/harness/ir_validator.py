@@ -14,6 +14,7 @@ class IRTopologyError(Exception):
 class IRValidator:
     """
     Layer 5 (Phase 1): IR Topology Validator (DAG Validation)
+    增强版：包含全量算子的入参边界与 Options 必填字典校验。
     """
 
     @staticmethod
@@ -71,10 +72,30 @@ class IRValidator:
                     errors.append(f"[{node_context}] Missing source column: '{arg.value}'")
                 elif arg.type == "STEP_REF" and arg.value not in ir_spec.intermediate_steps:
                     errors.append(f"[{node_context}] Missing intermediate step reference: '{arg.value}'")
+                # TABLE_REF 的有效性将在运行时由 extra_tables 确认，静态期予以放行
             
-            # Validate min no. of inputs to operators
-            if node.operation in ["ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "CONCAT"] and len(node.inputs) < 2:
-                errors.append(f"[{node_context}] Operator '{node.operation}' requires at least 2 inputs.")
+            op = node.operation
+
+            # [升级] Validate min no. of inputs to operators
+            if op in ["ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "CONCAT", "JOIN", "UNION"] and len(node.inputs) < 2:
+                errors.append(f"[{node_context}] Operator '{op}' requires at least 2 inputs.")
+            elif op not in ["COMPUTE_EXPR"] and len(node.inputs) < 1:
+                # COMPUTE_EXPR 允许 0 输入，因为它通过 formula 直接操作全局执行沙盒
+                errors.append(f"[{node_context}] Operator '{op}' requires at least 1 input.")
+
+            # [新增] 防呆预检：针对重度依赖 options 的高阶算子
+            if op == "COMPUTE_EXPR" and (not node.options or "formula" not in node.options):
+                errors.append(f"[{node_context}] Operator 'COMPUTE_EXPR' requires 'formula' in options.")
+            elif op == "FILTER" and (not node.options or "condition" not in node.options):
+                errors.append(f"[{node_context}] Operator 'FILTER' requires 'condition' in options.")
+            elif op == "EXPLODE" and (not node.options or "column" not in node.options):
+                errors.append(f"[{node_context}] Operator 'EXPLODE' requires 'column' in options.")
+            elif op == "REGEX_EXTRACT" and (not node.options or "pattern" not in node.options):
+                errors.append(f"[{node_context}] Operator 'REGEX_EXTRACT' requires 'pattern' in options.")
+            elif op == "REPLACE" and (not node.options or "pattern" not in node.options):
+                errors.append(f"[{node_context}] Operator 'REPLACE' requires 'pattern' in options.")
+            elif op == "WINDOW_APPLY" and (not node.options or "function" not in node.options or "target_column" not in node.options):
+                errors.append(f"[{node_context}] Operator 'WINDOW_APPLY' requires 'function' and 'target_column' in options.")
 
         # 2. Validate the intermidiate step nodes
         for step_name, node in ir_spec.intermediate_steps.items():

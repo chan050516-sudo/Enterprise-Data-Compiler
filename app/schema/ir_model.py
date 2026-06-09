@@ -15,13 +15,9 @@ class IRNode(BaseModel):
         # 基础算子
         "COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
         # 清洗与规范化算子
-        "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", 
-        # 实体消歧算子
-        "RESOLVE_ENTITIES",
+        "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", "RESOLVE_ENTITIES", "REGEX_EXTRACT", "REPLACE", "FILLNA",
         # 关系代数与高阶表达算子
-        "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY", 
-        # 结构降级与多值分裂算子
-        "FILTER", "EXPLODE",
+        "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY", "FILTER", "EXPLODE",
         # 图灵完备级 SQL 算子
         "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT"
     ]
