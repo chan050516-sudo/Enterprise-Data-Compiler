@@ -1,0 +1,144 @@
+{
+  "registry": [
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Amount",
+      "target_field": "revenue",
+      "confidence": 0.95,
+      "description": "ERP transaction total amount"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Posting Date",
+      "target_field": "transaction_date",
+      "confidence": 0.98,
+      "description": "ERP document posting date"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Name",
+      "target_field": "business_partner_name",
+      "confidence": 0.92,
+      "description": "Customer or vendor name"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Customer No",
+      "target_field": "business_partner_id",
+      "confidence": 0.96,
+      "description": "Customer or vendor identification code"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Invoice Number",
+      "target_field": "source_invoice_id",
+      "confidence": 0.99,
+      "description": "Original ERP invoice number"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Material Description",
+      "target_field": "product_description",
+      "confidence": 0.94,
+      "description": "Material/product description"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Quantity",
+      "target_field": "order_quantity",
+      "confidence": 0.97,
+      "description": "Purchase or sales order quantity"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Unit",
+      "target_field": "unit_of_measure",
+      "confidence": 0.93,
+      "description": "Unit of measure (e.g., PC, KG)"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Net Price",
+      "target_field": "unit_net_price",
+      "confidence": 0.96,
+      "description": "Net unit price"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Net Amount",
+      "target_field": "total_net_amount",
+      "confidence": 0.98,
+      "description": "Total line or document amount"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Product",
+      "target_field": "product_name",
+      "confidence": 0.96,
+      "description": "Product name from Contoso/Northwind dataset"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Sales Order",
+      "target_field": "order_id",
+      "confidence": 0.97,
+      "description": "Sales order identifier from Contoso dataset"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Order Date",
+      "target_field": "order_date",
+      "confidence": 0.98,
+      "description": "Order placement date from Northwind dataset"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Salesperson Name",
+      "target_field": "sales_rep_name",
+      "confidence": 0.92,
+      "description": "Sales representative name from Northwind dataset"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Deal Size",
+      "target_field": "deal_size_category",
+      "confidence": 0.94,
+      "description": "Deal size classification (Small/Medium/Large)"
+    },
+    {
+      "domain": "sales_retail",
+      "source_pattern": "Product Line",
+      "target_field": "product_category",
+      "confidence": 0.95,
+      "description": "Product line/category classification"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Posting Date",
+      "target_field": "posting_date",
+      "confidence": 0.97,
+      "description": "GL posting date from Australian SME dataset"
+    },
+    {
+      "domain": "finance_erp",
+      "source_pattern": "Chart of Accounts",
+      "target_field": "account_code",
+      "confidence": 0.93,
+      "description": "GL account code from Australian SME dataset"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Supplier",
+      "target_field": "supplier_name",
+      "confidence": 0.96,
+      "description": "Supplier name from Australian SME dataset"
+    },
+    {
+      "domain": "procurement_logistics",
+      "source_pattern": "Payment Term",
+      "target_field": "payment_terms",
+      "confidence": 0.90,
+      "description": "Customer payment term (Net 30, etc.)"
+    }
+  ]
+}

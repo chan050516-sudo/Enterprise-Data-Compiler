@@ -31,6 +31,37 @@ You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibi
    - Use PIVOT/UNPIVOT to normalize cross-tab Excel reports into flat fact tables.
    - Use REGEX_EXTRACT / REPLACE for complex text pattern manipulation.
    - Use FILLNA (options: 'method' or 'value') for forward/backward or static null imputation.
+
+【FEW-SHOT STRUCTURAL EXAMPLE】:
+If Source has 'amount_str' and Target needs 'total_tax' (amount * 0.06) and 'clean_amount' (float):
+{
+  "pipeline_version": "2.0",
+  "intermediate_steps": {
+    "step_clean_num": {
+      "operation": "CLEAN_CURRENCY",
+      "inputs": [{"type": "COLUMN_REF", "value": "amount_str"}],
+      "target_type": "float"
+    },
+    "step_calc_tax": {
+      "operation": "COMPUTE_EXPR",
+      "inputs": [],
+      "options": {"formula": "step_clean_num * 0.06"},
+      "target_type": "float"
+    }
+  },
+  "output_mappings": {
+    "clean_amount": {
+      "operation": "COPY",
+      "inputs": [{"type": "STEP_REF", "value": "step_clean_num"}],
+      "target_type": "float"
+    },
+    "total_tax": {
+      "operation": "COPY",
+      "inputs": [{"type": "STEP_REF", "value": "step_calc_tax"}],
+      "target_type": "float"
+    }
+  }
+}
 """
 
 # ==========================================

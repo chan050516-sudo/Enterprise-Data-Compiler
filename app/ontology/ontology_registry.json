@@ -37,5 +37,191 @@
         }
       ]
     }
+  },
+  
+  "finance_erp": {
+    "dataset_name": "erp_transaction_fact",
+    "fields": {
+      "source_invoice_id": {
+        "type": "string",
+        "description": "Original ERP invoice number",
+        "fallback_strategy": "HALT"
+      },
+      "business_partner_id": {
+        "type": "string",
+        "description": "Customer or vendor identification code",
+        "fallback_strategy": "KEEP_NULL"
+      },
+      "business_partner_name": {
+        "type": "string",
+        "description": "Customer or vendor name",
+        "fallback_strategy": "DEFAULT_STRING",
+        "default_value": "UNKNOWN_PARTNER"
+      },
+      "transaction_date": {
+        "type": "date",
+        "description": "ERP document posting date",
+        "fallback_strategy": "HALT"
+      },
+      "posting_date": {
+        "type": "date",
+        "description": "GL posting date",
+        "fallback_strategy": "KEEP_NULL"
+      },
+      "account_code": {
+        "type": "string",
+        "description": "GL account code"
+      },
+      "revenue": {
+        "type": "float",
+        "description": "ERP transaction total amount",
+        "fallback_strategy": "USE_ZERO"
+      }
+    },
+    "odcs_contracts": {
+      "row_level_rules": [
+        {
+          "column": "source_invoice_id",
+          "assertion": "not_null",
+          "severity": "error"
+        },
+        {
+          "column": "revenue",
+          "assertion": "non_negative",
+          "severity": "warning",
+          "tolerance_ratio": 0.05
+        },
+        {
+          "assertion": "date_tolerance",
+          "target_column": "posting_date",
+          "column": "transaction_date",
+          "severity": "warning",
+          "tolerance_window_days": 3
+        }
+      ],
+      "dataset_level_rules": [
+        {
+          "metric": "volume_check",
+          "min_rows": 1
+        }
+      ]
+    }
+  },
+
+  "procurement_logistics": {
+    "dataset_name": "fct_warehouse_inventory_move",
+    "description": "Enterprise-grade fact table for warehouse receiving, material movement, and procurement reconciliation.",
+    "fields": {
+      "warehouse_id": {
+        "type": "string",
+        "description": "Standardized physical warehouse hub identifier (Normalized format e.g., WH-MY-01).",
+        "fallback_strategy": "HALT"
+      },
+      "source_invoice_id": {
+        "type": "string",
+        "description": "Associated upstream original purchase order number or invoice number.",
+        "fallback_strategy": "KEEP_NULL"
+      },
+      "product_id": {
+        "type": "string",
+        "description": "Standard core material SKU identifier.",
+        "fallback_strategy": "HALT"
+      },
+      "product_description": {
+        "type": "string",
+        "description": "Semantic description of material name and specifications.",
+        "fallback_strategy": "DEFAULT_STRING",
+        "default_value": "UNKNOWN_MATERIAL"
+      },
+      "supplier_name": {
+        "type": "string",
+        "description": "Standardized legal name of supplier or vendor.",
+        "fallback_strategy": "DEFAULT_STRING",
+        "default_value": "UNKNOWN_SUPPLIER"
+      },
+      "order_quantity": {
+        "type": "int",
+        "description": "Actual received and physically verified quantity in the warehouse.",
+        "fallback_strategy": "USE_ZERO"
+      },
+      "unit_of_measure": {
+        "type": "string",
+        "description": "Base label for statutory unit of measure (e.g., PC, KG, PLT).",
+        "fallback_strategy": "DEFAULT_STRING",
+        "default_value": "PC"
+      },
+      "unit_net_price": {
+        "type": "float",
+        "description": "Purchase net unit price excluding tax.",
+        "fallback_strategy": "USE_ZERO"
+      },
+      "total_net_amount": {
+        "type": "float",
+        "description": "Total net amount received per line item (Core voucher for billing reconciliation).",
+        "fallback_strategy": "USE_ZERO"
+      },
+      "payment_terms": {
+        "type": "string",
+        "description": "Standard indicator for contract payment terms (e.g., NET_30, NET_60).",
+        "fallback_strategy": "DEFAULT_STRING",
+        "default_value": "NET_30"
+      },
+      "arrival_date": {
+        "type": "date",
+        "description": "The date when goods arrive at the site for unloading.",
+        "fallback_strategy": "HALT"
+      },
+      "inspection_date": {
+        "type": "date",
+        "description": "The completion date for quality control and inspection (Used as a compliance gate for inventory stocking).",
+        "fallback_strategy": "HALT"
+      }
+    },
+    "odcs_contracts": {
+      "row_level_rules": [
+        {
+          "column": "warehouse_id",
+          "assertion": "pattern",
+          "regex": "^WH-[A-Z0-9]+-\\d+$",
+          "severity": "error",
+          "description": "Enforce strict filtering of non-standard warehouse codes; must match the structure: WH-[Region Code]-[Number]."
+        },
+        {
+          "column": "product_id",
+          "assertion": "not_null",
+          "severity": "error"
+        },
+        {
+          "column": "order_quantity",
+          "assertion": "non_negative",
+          "severity": "error"
+        },
+        {
+          "column": "unit_net_price",
+          "assertion": "non_negative",
+          "severity": "error"
+        },
+        {
+          "assertion": "expression",
+          "formula": "abs(total_net_amount - order_quantity * unit_net_price) < 0.01",
+          "severity": "error",
+          "description": "Core defense line (Physical balance of funds): Financial settlement amount must strictly equal the order quantity multiplied by the purchase net unit price."
+        },
+        {
+          "assertion": "date_tolerance",
+          "column": "inspection_date",
+          "target_column": "arrival_date",
+          "severity": "warning",
+          "tolerance_window_days": 5,
+          "description": "Supply chain compliance SLA: The gap between the quality inspection date and the arrival date must not exceed an operational tolerance window of 5 days."
+        }
+      ],
+      "dataset_level_rules": [
+        {
+          "metric": "volume_check",
+          "min_rows": 1
+        }
+      ]
+    }
   }
 }
