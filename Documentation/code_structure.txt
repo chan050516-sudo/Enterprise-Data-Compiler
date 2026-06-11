@@ -10,6 +10,13 @@ enterprise-data-compiler/
 │   ├── config/ 
 │   │   └── settings.py        # 包含算子白名单、类型契约等全局静态配置 
 │
+│   ├── chaos/            # Layer 1: 确定性数据读入 
+│   │   ├── engine.py 
+│   │   ├── noise_injector.py 
+│   │   ├── pandera_breaker.py
+│   │   ├── semantic_drifter.py
+│   │   └── benchmark_metrics.py 
+│
 │   ├── connectors/            # Layer 1: 确定性数据读入 
 │   │   ├── base.py 
 │   │   ├── csv_connector.py 

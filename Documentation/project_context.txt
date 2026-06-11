@@ -219,10 +219,7 @@ Generate code with this structure:
 
 ```
 app/
-  chaos/             # Layer 0: Chaos Engineering Toolkit
-    generators/      # SDV synthetic data generators
-    corruptors/      # Faker-based typo & noise injection
-    schema_breakers/ # Pandera-based rule violation generators
+  chaos/
   connectors/
   schema/
   ontology/
