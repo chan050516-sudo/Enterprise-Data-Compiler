@@ -64,18 +64,33 @@ You MUST implement all layers as separate modules.
 
 ---
 
-LAYER 0 — DATA CHAOS ENGINE (BENCHMARK & RESILIENCE TESTING)
 ### LAYER 0 — DATA CHAOS & BENCHMARK MATRIX (THE MOAT)
 Purpose: Generate deterministic, realistic data anomalies to test LLM semantic understanding and Layer 5 validation boundaries.
-Mechanism (The Adversarial Loop): 
-Reads the rigorous ODCS contracts from Layer 3, translates them into breaking-schemas, and generates precise adversarial datasets.
-Modules:
-1. Dataset Factory: Houses high-value golden clean data templates (Invoices, Payroll, Purchase Orders).
-2. Chaos Engine (External Tools Integration): Accepts clean data and performs Controlled Corruption via three dedicated interceptors:
-   - Semantic Drift Generator (Custom): Mutates column schemas to simulate legacy system variance (e.g., mutating "Invoice Date" ➔ "txn_dt"). Stresses Layer 4.
-   - Contract Breaker (Driven by Pandera + Hypothesis): Automatically translates Layer 3 ODCS assertions into Pandera Schemas, then uses Hypothesis to generate edge-cases that intentionally violate mathematical bounds, cross-field rules, and relational integrities. Stresses Layer 5.
-   - Human Noise Injector (Driven by Faker): Generates format drift, typo degradation (e.g., "Pending" ➔ "Pndng"), messy currencies, and non-standard ISO dates. Stresses Layer 6 native canonicalization ops.
-3. Mapping Benchmark Arena: Tracks and compares the exact IR generation accuracy metrics across different LLM backends against the known ground-truth matrix.
+Mechanism: Two complementary modes of chaos generation:
+
+1. **Atomic Corruptors** (for fine-grained robustness testing):
+   - HeaderCorruptor: Column name drift (synonyms, case, prefixes, abbreviations)
+   - HumanCorruptor: Typing errors (keyboard proximity, case, spaces, abbreviations with weights)
+   - SpreadsheetCorruptor: Excel/CSV artifacts (serial dates, auto‑parsing, scientific notation, leading zero loss, boolean pollution)
+   - MissingnessCorruptor: NULLs, empty strings, zero filling
+   - ValueCorruptor: Field value synonyms (e.g., "Walk In" → "Walkin")
+   - DependencyBreaker: Expression violations and date tolerance breaches
+
+2. **Business Scenarios** (real-world data incidents):
+   - Duplicate Import: Entire file duplicated (e.g., month‑end reconciliation error)
+   - Month‑end Truncation: Export only first 80% of rows
+   - Schema Evolution: Column additions, deletions, and renaming
+   - Cross‑source Conflict: Value disagreements between POS and ERP
+   - Delayed Reporting: Date shifts (e.g., 7 days late)
+   - Aggregate Mismatch: Group totals inconsistent with line items
+
+All corruptors and scenarios are unified under a single benchmark runner (`tests/run_robustness_benchmark.py`) that:
+- Accepts clean data and automatically extracts target ontology (if not provided)
+- Produces `(messy_df, ground_truth, corruption_log)`
+- Executes the full 8‑layer compilation pipeline
+- Computes IR accuracy (schema/operator scores), trust score, and (planned) per‑corruption detection/repair rates.
+
+The **Mapping Benchmark Arena** tracks and compares IR generation accuracy across different LLM backends against the ground‑truth matrix.
 
 ---
 
