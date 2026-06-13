@@ -1,0 +1,47 @@
+{
+  "report_id": "AUDIT-20260613161512",
+  "timestamp": "2026-06-13T16:15:12.783408",
+  "routing_decision": "QUARANTINE",
+  "trust_score": 0.0,
+  "total_rows": 30,
+  "quarantined_rows_count": 30,
+  "dataset_errors": [],
+  "errors": [
+    {
+      "rule": "not_null",
+      "affected_rows": 1,
+      "column": "product_id",
+      "is_escalated": false,
+      "error_message": null
+    },
+    {
+      "rule": "non_negative",
+      "affected_rows": 1,
+      "column": "order_quantity",
+      "is_escalated": false,
+      "error_message": null
+    },
+    {
+      "rule": "non_negative",
+      "affected_rows": 1,
+      "column": "unit_net_price",
+      "is_escalated": false,
+      "error_message": null
+    },
+    {
+      "rule": "expression",
+      "affected_rows": 30,
+      "column": null,
+      "is_escalated": false,
+      "error_message": null
+    },
+    {
+      "rule": "date_tolerance",
+      "affected_rows": 1,
+      "column": "inspection_date",
+      "is_escalated": true,
+      "error_message": null
+    }
+  ],
+  "warnings": []
+}

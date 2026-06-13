@@ -230,15 +230,32 @@ class IRCompiler:
         return res_series.sort_index()
 
     def _op_case_when(self, args, opts):
-        df_in = args[0]
-        cases, default_val = opts.get("cases", []), opts.get("default", np.nan)
-        conditions, choices = [], []
+        df_or_series = args[0]
+        # 如果输入是 Series，转换为单列 DataFrame
+        if isinstance(df_or_series, pd.Series):
+            df_in = df_or_series.to_frame(name='_temp')
+        else:
+            df_in = df_or_series.copy()
+        
+        cases = opts.get("cases", [])
+        default_val = opts.get("default", np.nan)
+        conditions = []
+        choices = []
+        
         try:
             for case in cases:
-                conditions.append(df_in.eval(case["condition"]))
+                # 使用 df.eval 评估条件
+                cond_mask = df_in.eval(case["condition"])
+                conditions.append(cond_mask)
                 val = case["value"]
-                choices.append(df_in[val] if isinstance(val, str) and val in df_in.columns else val)
-            return pd.Series(np.select(conditions, choices, default=default_val), index=df_in.index)
+                # 如果 value 是字符串且在 DataFrame 列中，取该列；否则作为字面量
+                if isinstance(val, str) and val in df_in.columns:
+                    choices.append(df_in[val])
+                else:
+                    choices.append(val)
+            # 使用 np.select 进行多路选择
+            result = pd.Series(np.select(conditions, choices, default=default_val), index=df_in.index)
+            return result
         except Exception as e:
             raise CompilationError(f"CASE_WHEN evaluation failed: {str(e)}")
 

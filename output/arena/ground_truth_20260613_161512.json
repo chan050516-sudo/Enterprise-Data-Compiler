@@ -1,0 +1,14 @@
+{
+  "plant_num": "warehouse_id",
+  "MaterialNum": "product_id",
+  "product_description": "product_description",
+  "UnitCost": "unit_net_price",
+  "insp_dt": "inspection_date",
+  "GR_Qty": "order_quantity",
+  "unit_of_measure": "unit_of_measure",
+  "Sum_Net": "total_net_amount",
+  "source_invoice_id": "source_invoice_id",
+  "arrival_date": "arrival_date",
+  "supplier_name": "supplier_name",
+  "payment_terms": "payment_terms"
+}
