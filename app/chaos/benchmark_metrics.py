@@ -43,9 +43,10 @@ class MappingBenchmarkArena:
                 formula = node.get("options", {}).get("formula", "")
                 # 用正则提取所有可能是列名的变量
                 vars_in_formula = re.findall(r'[a-zA-Z_]\w*', formula)
+                step_names = set(intermediate_steps.keys())
                 for v in vars_in_formula:
-                    # 排除掉常见的函数名，剩下的视作列名
-                    if v not in ["abs", "sum", "mean", "min", "max"]:
+                    # 排除常见函数名和中间步骤名
+                    if v not in ["abs", "sum", "mean", "min", "max"] and v not in step_names:
                         sources.add(v)
                         
             return list(sources)

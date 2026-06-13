@@ -72,14 +72,23 @@ class ODCSContractBreaker:
         # 3. 一次性实例化
         pa_columns = {}
         for col, props in col_defs.items():
-            pa_columns[col] = pa.Column(
-                props["type"],
-                nullable=props["nullable"],
-                checks=props["checks"] if props["checks"] else None,
-                allow_duplicates=not props["unique"]
-            )
+            try:
+                pa_columns[col] = pa.Column(
+                    props["type"],
+                    nullable=props["nullable"],
+                    checks=props["checks"] if props["checks"] else None,
+                    allow_duplicates=not props["unique"]
+                )
+            except TypeError:
+                # 旧版本不支持 allow_duplicates，忽略该参数
+                pa_columns[col] = pa.Column(
+                    props["type"],
+                    nullable=props["nullable"],
+                    checks=props["checks"] if props["checks"] else None
+                )
+                logger.warning(f"pandera version does not support allow_duplicates; uniqueness constraint for column '{col}' may not be enforced.")
 
-        return pa.DataFrameSchema(pa_columns)
+                return pa.DataFrameSchema(pa_columns)
 
     def generate_adversarial_payload(self, domain: str, size: int = 50, poison_ratio: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """

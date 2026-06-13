@@ -41,7 +41,7 @@ class DataTrustEngine:
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
         base_mapping_confidence: float = 1.0
-    ) -> Dict[str, Any]:
+    ) -> TrustAuditReport:
         """执行全面信任度评估并返回带有路由决策的报告"""
         
         quarantine_indices: set = set()

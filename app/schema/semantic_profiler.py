@@ -84,12 +84,15 @@ class SemanticProfiler:
                         related_col = matches.idxmax()
                         # Formula Inference: multiple (ratio * x) relationship (such as SST, tax, formula relationship)
                         ratio = (numeric_df[col] / numeric_df[related_col].replace(0, np.nan)).mean()
-                        schema["fields"][col]["relationships"] = [{
-                            "with": related_col,
-                            "type": "linear",
-                            "formula": f"x * {ratio:.4f}",
-                            "confidence": round(float(matches.max()), 4)
-                        }]
+                        if np.isnan(ratio):
+                            logger.warning(f"Could not infer ratio between {col} and {related_col}, skipping relationship.")
+                        else:
+                            schema["fields"][col]["relationships"] = [{
+                                "with": related_col,
+                                "type": "linear",
+                                "formula": f"x * {ratio:.4f}",
+                                "confidence": round(float(matches.max()), 4)
+                            }]
             except Exception as e:
                 logger.warning(f"Relationship discovery skipped due to computation error: {e}")
 

@@ -16,7 +16,7 @@ class RowLevelRule(BaseModel):
     column: Optional[str] = None
     assertion: Literal[
         "not_null", "non_negative", "range", "max_length", 
-        "pattern", "unique", "cross_field", "enum_match", "foreign_key", "expression"
+        "pattern", "unique", "cross_field", "enum_match", "foreign_key", "expression", "date_tolerance"
     ]
     severity: Literal["error", "warning"] = "error"
     tolerance_ratio: float = Field(default=0.0, ge=0.0, le=1.0)

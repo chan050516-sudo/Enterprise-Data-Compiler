@@ -107,6 +107,14 @@ class IRValidator:
                 errors.append(f"[Output] Target column '{target_col}' not defined in business Ontology.")
             check_node_args(node, f"Output: {target_col}")
 
+        group_by_steps = [name for name, node in ir_spec.intermediate_steps.items() if node.operation == "GROUP_BY"]
+        if group_by_steps:
+            # 检查是否有其他步骤引用了这些 GROUP_BY 节点
+            for step_name, node in ir_spec.intermediate_steps.items():
+                for arg in node.inputs:
+                    if arg.type == "STEP_REF" and arg.value in group_by_steps:
+                        errors.append(f"GROUP_BY step '{arg.value}' is used as input to another step. This is not allowed because GROUP_BY changes row count. Use GROUP_BY only in output_mappings.")
+
         if errors:
             logger.error("IR Topology Validation Failed.")
             raise IRTopologyError(errors)
