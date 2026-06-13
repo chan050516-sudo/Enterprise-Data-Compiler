@@ -96,6 +96,21 @@ class SemanticProfiler:
             except Exception as e:
                 logger.warning(f"Relationship discovery skipped due to computation error: {e}")
 
+        def _make_json_serializable(obj):
+            if isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            elif isinstance(obj, (np.int64, np.int32)):
+                return int(obj)
+            elif isinstance(obj, (np.float64, np.float32)):
+                return float(obj)
+            elif isinstance(obj, dict):
+                return {k: _make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_make_json_serializable(item) for item in obj]
+            else:
+                return obj
+
+        schema = _make_json_serializable(schema)
         return schema
 
     @classmethod

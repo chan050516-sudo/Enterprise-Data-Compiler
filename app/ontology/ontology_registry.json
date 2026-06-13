@@ -1,40 +1,20 @@
 {
   "Customer_Ontology": {
+    "dataset_name": "Customer_Ontology",
     "fields": {
-      "customer_id": "string",
-      "gross_sales": "float",
-      "department_id": "string"
+      "customer_id": {"type": "string"},
+      "gross_sales": {"type": "float"},
+      "department_id": {"type": "string"}
     },
     "odcs_contracts": {
       "row_level_rules": [
-        {
-          "column": "customer_id",
-          "assertion": "not_null",
-          "severity": "error"
-        },
-        {
-          "column": "customer_id",
-          "assertion": "unique",
-          "severity": "error"
-        },
-        {
-          "column": "gross_sales",
-          "assertion": "non_negative",
-          "severity": "warning",
-          "tolerance_ratio": 0.02
-        },
-        {
-          "column": "department_id",
-          "assertion": "foreign_key",
-          "target_entity": "departments.id",
-          "severity": "error"
-        }
+        {"column": "customer_id", "assertion": "not_null", "severity": "error"},
+        {"column": "customer_id", "assertion": "unique", "severity": "error"},
+        {"column": "gross_sales", "assertion": "non_negative", "severity": "warning", "tolerance_ratio": 0.02},
+        {"column": "department_id", "assertion": "foreign_key", "target_entity": "departments.id", "severity": "error"}
       ],
       "dataset_level_rules": [
-        {
-          "metric": "volume_check",
-          "min_rows": 1
-        }
+        {"metric": "volume_check", "min_rows": 1}
       ]
     }
   },

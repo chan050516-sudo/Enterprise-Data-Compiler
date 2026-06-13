@@ -24,13 +24,15 @@ class GeminiClient:
     ) -> str:
         
         model = model_name or self.default_model
+        http_options = types.HttpOptions(timeout=60000)
         
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0.0,   # Deterministic
-            response_mime_type="application/json",
-            response_schema=response_schema,
+            # response_mime_type="application/json",
+            # response_schema=response_schema,
             max_output_tokens=8192,   # Prevent interception for huge output
+            http_options=http_options,
         )
 
         try:
@@ -43,6 +45,13 @@ class GeminiClient:
             
             if not response.text:
                 raise RuntimeError("LLM returned empty payload.")
+            
+            raw_text = response.text.strip()
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip()
                 
             return response.text
 

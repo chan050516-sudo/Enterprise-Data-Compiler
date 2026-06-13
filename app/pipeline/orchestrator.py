@@ -95,7 +95,7 @@ class PipelineOrchestrator:
 
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
         logger.info(f"--- Compilation Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
-        return clean_df, quarantine_df, audit_report
+        return clean_df, quarantine_df, audit_report, ir_spec
 
     def _route_data(self, compiled_df: pd.DataFrame, audit_report: TrustAuditReport) -> Tuple[pd.DataFrame, pd.DataFrame]:
         quarantine_indices = audit_report.quarantine_indices
