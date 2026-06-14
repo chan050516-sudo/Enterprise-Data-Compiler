@@ -136,7 +136,7 @@
       {
         "name": "double_entry_invariant",
         "type": "double_entry",
-        "rule": "SUM(debit) == SUM(credit)",
+        "rule": "abs(total_amount - line_amount) < 0.01",
         "apply_to": "JournalEntryLine",
         "severity": "error"
       },

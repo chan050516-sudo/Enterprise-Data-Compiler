@@ -1,0 +1,164 @@
+[
+  {
+    "mode": "corruptor",
+    "params": {
+      "model": "gemini-2.5-flash",
+      "max_retries": 2,
+      "seed": 42,
+      "break_expressions": true,
+      "drift_ratio": 0.8,
+      "noise_level": "Moderate"
+    },
+    "ir_metrics": {
+      "schema_score": 0.9048,
+      "operator_score": 1.0,
+      "composite_ir_accuracy": 0.9333
+    },
+    "trust_score": 0.0,
+    "detection_rates": {
+      "info": "Detection rate requires more detailed error indices; feature in progress."
+    },
+    "corruption_log_sample": [
+      {
+        "row": 58,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "everything",
+        "new_value": "evertthing"
+      },
+      {
+        "row": 86,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_SPACE",
+        "original_value": "top",
+        "new_value": " top "
+      },
+      {
+        "row": 71,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "production",
+        "new_value": "produdtion"
+      },
+      {
+        "row": 141,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "serious",
+        "new_value": "seeious"
+      },
+      {
+        "row": 170,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_CASE",
+        "original_value": "benefit",
+        "new_value": "benefit"
+      },
+      {
+        "row": 166,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_SPACE",
+        "original_value": "discuss",
+        "new_value": "discuss"
+      },
+      {
+        "row": 39,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "song",
+        "new_value": "svng"
+      },
+      {
+        "row": 80,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "answer",
+        "new_value": "wnswer"
+      },
+      {
+        "row": 185,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_SPACE",
+        "original_value": "pick",
+        "new_value": " pick "
+      },
+      {
+        "row": 157,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "nothing",
+        "new_value": "nothjng"
+      },
+      {
+        "row": 102,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "science",
+        "new_value": "scienve"
+      },
+      {
+        "row": 47,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "dinner",
+        "new_value": "dinneg"
+      },
+      {
+        "row": 68,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_CASE",
+        "original_value": "old",
+        "new_value": "OLD"
+      },
+      {
+        "row": 0,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "purpose",
+        "new_value": "putpose"
+      },
+      {
+        "row": 147,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_ABBREV",
+        "original_value": "usually",
+        "new_value": "u"
+      },
+      {
+        "row": 16,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_CASE",
+        "original_value": "knowledge",
+        "new_value": "KNOWLEDGE"
+      },
+      {
+        "row": 132,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_SPACE",
+        "original_value": "four",
+        "new_value": "four"
+      },
+      {
+        "row": 89,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "blood",
+        "new_value": "bloow"
+      },
+      {
+        "row": 45,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_TYPO",
+        "original_value": "fall",
+        "new_value": "falp"
+      },
+      {
+        "row": 109,
+        "column": "partner_type",
+        "corruption_type": "HUMAN_ABBREV",
+        "original_value": "Congress",
+        "new_value": "Con"
+      }
+    ]
+  }
+]

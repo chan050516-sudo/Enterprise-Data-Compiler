@@ -27,10 +27,10 @@ class ValueCorruptor:
                 continue
             idx = df.sample(n=num_poison).index
             for i in idx:
-                val = str(df.loc[i, col]).lower().strip()
+                val = str(df.at[i, col]).lower().strip()
                 if val in VALUE_SYNONYMS:
                     new_val = random.choice(VALUE_SYNONYMS[val])
-                    df.loc[i, col] = new_val
+                    df.at[i, col] = new_val
                     log.append({
                         "row": i,
                         "column": col,

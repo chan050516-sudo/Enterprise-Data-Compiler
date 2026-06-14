@@ -17,7 +17,9 @@ class MissingnessCorruptor:
         for col in df.columns:
             idx = df.sample(n=num_poison).index
             for i in idx:
-                old_val = df.loc[i, col]
+                old_val = df.at[i, col]
+                if isinstance(old_val, pd.Series):
+                    old_val = old_val.iloc[0] if not old_val.empty else np.nan
                 if pd.isna(old_val):
                     continue
                 # 选择缺失类型
@@ -34,7 +36,7 @@ class MissingnessCorruptor:
                         new_val = 0
                     else:
                         new_val = '0'
-                df.loc[i, col] = new_val
+                df.at[i, col] = new_val
                 log.append({
                     "row": i,
                     "column": col,

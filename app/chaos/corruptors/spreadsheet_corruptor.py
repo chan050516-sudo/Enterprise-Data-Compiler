@@ -17,9 +17,10 @@ class SpreadsheetCorruptor:
         for col in df.columns:
             # 日期列污染
             if pd.api.types.is_datetime64_any_dtype(df[col]):
-                idx = df.sample(n=num_poison).index
+                df[col] = df[col].astype(object)
                 for i in idx:
-                    val = df.loc[i, col]
+                    val = df.at[i, col]
+                    if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else np.nan
                     if pd.isna(val):
                         continue
                     old_val = val
@@ -37,7 +38,7 @@ class SpreadsheetCorruptor:
                             new_val = str(val)
                     else:  # auto_date
                         new_val = SpreadsheetCorruptor._excel_auto_date(val)
-                    df.loc[i, col] = new_val
+                    df.at[i, col] = new_val
                     log.append({
                         "row": i,
                         "column": col,
@@ -48,15 +49,18 @@ class SpreadsheetCorruptor:
 
             # 数值列污染
             elif pd.api.types.is_numeric_dtype(df[col]):
-                idx = df.sample(n=num_poison).index
+                df[col] = df[col].astype(object)
+                # idx = df.sample(n=num_poison).index
+
                 for i in idx:
-                    val = df.loc[i, col]
+                    val = df.at[i, col]
+                    if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else np.nan
                     if pd.isna(val):
                         continue
                     old_val = val
                     if random.random() < 0.5:
                         new_val = f"{val:.2e}"
-                        df.loc[i, col] = new_val
+                        df.at[i, col] = new_val
                         log.append({
                             "row": i,
                             "column": col,
@@ -69,10 +73,12 @@ class SpreadsheetCorruptor:
             elif pd.api.types.is_string_dtype(df[col]) or pd.api.types.is_object_dtype(df[col]):
                 idx = df.sample(n=num_poison).index
                 for i in idx:
-                    val = str(df.loc[i, col])
-                    if val.isdigit() and val.startswith('0'):
-                        new_val = str(int(val))
-                        df.loc[i, col] = new_val
+                    val = str(df.at[i, col])
+                    if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else np.nan
+                    val_str = str(val).strip()
+                    if val_str.isdigit() and val_str.startswith('0'):
+                        new_val = str(int(val_str))
+                        df.at[i, col] = new_val
                         log.append({
                             "row": i,
                             "column": col,
@@ -84,7 +90,7 @@ class SpreadsheetCorruptor:
                     elif val.upper() in ['YES', 'NO', 'TRUE', 'FALSE', 'Y', 'N']:
                         if random.random() < 0.3:
                             new_val = '1' if val.upper() in ['YES', 'TRUE', 'Y'] else '0'
-                            df.loc[i, col] = new_val
+                            df.at[i, col] = new_val
                             log.append({
                                 "row": i,
                                 "column": col,

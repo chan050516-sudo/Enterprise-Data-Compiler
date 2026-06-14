@@ -1,0 +1,8 @@
+python tests/run_robustness_benchmark.py `
+    --ontology-file app/ontology/canonical_ontology.json `
+    --num-rows 200 `
+    --mode corruptor `
+    --noise-level Moderate
+
+
+python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_ontology.json --num-rows 200 --mode corruptor --noise-level Moderate

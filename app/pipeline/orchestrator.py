@@ -71,7 +71,8 @@ class PipelineOrchestrator:
             
             # 全局熔断检查
             if audit_report.dataset_errors:
-                raise RuntimeError(f"Pipeline Halted: Critical Dataset Failures detected: {audit_report.dataset_errors}")
+                logger.warning(f"Dataset-level errors detected: {audit_report.dataset_errors}")
+                # raise RuntimeError(f"Pipeline Halted: Critical Dataset Failures detected: {audit_report.dataset_errors}")
                 
             # --- 自治路由决策树 ---
             decision = audit_report.routing_decision

@@ -1,7 +1,11 @@
 import pandas as pd
 from typing import Dict, List, Tuple, Any
-from .corruptors import HeaderCorruptor, HumanCorruptor, SpreadsheetCorruptor, \
-    MissingnessCorruptor, ValueCorruptor, DependencyBreaker
+from app.chaos.corruptors.human_corruptor import HumanCorruptor
+from app.chaos.corruptors.spreadsheet_corruptor import SpreadsheetCorruptor
+from app.chaos.corruptors.missingness_corruptor import MissingnessCorruptor
+from app.chaos.corruptors.header_corruptor import HeaderCorruptor
+from app.chaos.corruptors.value_corruptor import ValueCorruptor
+from app.chaos.corruptors.dependency_breaker import DependencyBreaker
 from .scenarios.duplicate_import import DuplicateImportScenario
 from .scenarios.month_end_truncation import MonthEndTruncationScenario
 from .scenarios.schema_evolution import SchemaEvolutionScenario

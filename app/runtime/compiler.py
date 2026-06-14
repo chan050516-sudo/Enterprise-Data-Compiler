@@ -120,7 +120,7 @@ class IRCompiler:
     # 算子实现区 2: 清洗与空值处理
     # ==========================================
     def _op_parse_date(self, args, opts): 
-        return pd.to_datetime(args[0], errors='coerce').dt.strftime('%Y-%m-%d')
+        return pd.to_datetime(args[0], errors='coerce', utc=True).dt.strftime('%Y-%m-%d')
         
     def _op_clean_currency(self, args, opts): 
         cleaned_str = args[0].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)

@@ -38,7 +38,7 @@ class HumanCorruptor:
                 continue
             idx = df.sample(n=num_poison).index
             for i in idx:
-                val = str(df.loc[i, col])
+                val = str(df.at[i, col])
                 if val in ['nan', 'None', '']:
                     continue
                 old_val = val
@@ -68,7 +68,7 @@ class HumanCorruptor:
                     else:
                         val = val[0] if random.random() > 0.5 else val
 
-                df.loc[i, col] = val
+                df.at[i, col] = val
                 log.append({
                     "row": i,
                     "column": col,

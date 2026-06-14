@@ -144,7 +144,10 @@ def _compute_detection_rates(corruption_log: List[Dict], audit_report) -> Dict[s
 
 def main():
     parser = argparse.ArgumentParser(description="Enterprise Data Compiler Robustness Benchmark")
-    parser.add_argument("--clean-data", required=True, help="Path to clean CSV file")
+    # parser.add_argument("--clean-data", required=True, help="Path to clean CSV file")
+    parser.add_argument("--clean-data", required=False, help="Path to clean CSV file (if not provided, data will be generated from ontology)")
+    parser.add_argument("--ontology-file", default="app/ontology/canonical_ontology.json", help="Path to ontology JSON file (used for generation)")
+    parser.add_argument("--num-rows", type=int, default=100, help="Number of rows to generate if --clean-data not provided")
     parser.add_argument("--ontology-name", default="auto", help="Name of ontology to use (or 'auto' for auto-extraction)")
     parser.add_argument("--registry", default="app/ontology/ontology_registry.json", help="Path to ontology registry JSON")
     parser.add_argument("--mode", choices=["corruptor", "scenario", "all"], default="corruptor", help="Test mode")
@@ -167,7 +170,7 @@ def main():
     else:
         # 生成数据
         from utils.data_generator import OntologyDataGenerator
-        with open(args.ontology_file, 'r') as f:
+        with open(args.ontology_file, 'r', encoding='utf-8') as f:
             ontology_dict = json.load(f)
         clean_df = OntologyDataGenerator.generate(ontology_dict, num_rows=args.num_rows, random_seed=args.seed)
         logger.info(f"Generated clean data from {args.ontology_file}: {len(clean_df)} rows, {len(clean_df.columns)} cols")
@@ -179,7 +182,7 @@ def main():
             ontology = OntologyExtractor.from_dataframe(clean_df, dataset_name="auto_benchmark")
         else:
             # 将 ontology_file 的内容直接作为目标 ontology（它本身就是 TargetOntology 格式）
-            with open(args.ontology_file, 'r') as f:
+            with open(args.ontology_file, 'r', encoding='utf-8') as f:
                 ontology = json.load(f)
             logger.info("Using ontology file directly as target ontology (generated data already complies)")
     else:
@@ -188,17 +191,31 @@ def main():
         logger.info(f"Loaded ontology '{args.ontology_name}' from registry")
 
     # 加载干净数据
-    clean_df = load_clean_data(args.clean_data)
-    logger.info(f"Loaded clean data: {len(clean_df)} rows, {len(clean_df.columns)} cols")
+    # clean_df = load_clean_data(args.clean_data)
+    # logger.info(f"Loaded clean data: {len(clean_df)} rows, {len(clean_df.columns)} cols")
 
     # 确定目标本体
     if args.ontology_name == "auto":
-        ontology = OntologyExtractor.from_dataframe(clean_df, dataset_name="auto_benchmark")
-        logger.info("Auto-extracted ontology from clean data")
+        if args.clean_data:
+            ontology = OntologyExtractor.from_dataframe(clean_df, dataset_name="auto_benchmark")
+            logger.info("Auto-extracted ontology from clean data")
+        else:
+            # 这里应该直接使用 ontology_dict，而不是调用 OntologyExtractor
+            ontology = ontology_dict
+            logger.info("Using ontology file directly as target ontology (generated data already complies)")
     else:
         registry = OntologyRegistryManager(args.registry)
         ontology = registry.get_ontology(args.ontology_name)
         logger.info(f"Loaded ontology '{args.ontology_name}' from registry")
+
+
+    # if args.ontology_name == "auto":
+    #     ontology = OntologyExtractor.from_dataframe(clean_df, dataset_name="auto_benchmark")
+    #     logger.info("Auto-extracted ontology from clean data")
+    # else:
+    #     registry = OntologyRegistryManager(args.registry)
+    #     ontology = registry.get_ontology(args.ontology_name)
+    #     logger.info(f"Loaded ontology '{args.ontology_name}' from registry")
 
     # 基本配置
     base_config = {

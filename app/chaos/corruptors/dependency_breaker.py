@@ -38,15 +38,15 @@ class DependencyBreaker:
                     if c in df.columns and pd.api.types.is_numeric_dtype(df[c]):
                         idx = df.sample(n=num_poison).index
                         for i in idx:
-                            old_val = df.loc[i, c]
+                            old_val = df.at[i, c]
                             if pd.notna(old_val):
-                                df.loc[i, c] += 999.99
+                                df.at[i, c] += 999.99
                                 log.append({
                                     "row": i,
                                     "column": c,
                                     "corruption_type": "DEPENDENCY_EXPRESSION",
                                     "original_value": old_val,
-                                    "new_value": df.loc[i, c]
+                                    "new_value": df.at[i, c]
                                 })
                         break  # 只破坏第一个找到的列
 
@@ -60,10 +60,10 @@ class DependencyBreaker:
                     df[col1] = pd.to_datetime(df[col1], errors='coerce')
                     df[col2] = pd.to_datetime(df[col2], errors='coerce')
                     for i in idx:
-                        if pd.notna(df.loc[i, col2]):
-                            old_val = df.loc[i, col1]
-                            new_val = df.loc[i, col2] + timedelta(days=tolerance + 10)
-                            df.loc[i, col1] = new_val
+                        if pd.notna(df.at[i, col2]):
+                            old_val = df.at[i, col1]
+                            new_val = df.at[i, col2] + timedelta(days=tolerance + 10)
+                            df.at[i, col1] = new_val
                             log.append({
                                 "row": i,
                                 "column": col1,

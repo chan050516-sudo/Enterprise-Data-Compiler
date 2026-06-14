@@ -7,14 +7,21 @@ import random
 import logging
 from typing import Tuple, Dict, List, Optional, Any
 
-from app.chaos.corruptors import (
-    HumanCorruptor,
-    SpreadsheetCorruptor,
-    MissingnessCorruptor,
-    HeaderCorruptor,
-    ValueCorruptor,
-    DependencyBreaker,
-)
+from app.chaos.corruptors.human_corruptor import HumanCorruptor
+from app.chaos.corruptors.spreadsheet_corruptor import SpreadsheetCorruptor
+from app.chaos.corruptors.missingness_corruptor import MissingnessCorruptor
+from app.chaos.corruptors.header_corruptor import HeaderCorruptor
+from app.chaos.corruptors.value_corruptor import ValueCorruptor
+from app.chaos.corruptors.dependency_breaker import DependencyBreaker
+
+# from app.chaos.corruptors import (
+#     HumanCorruptor,
+#     SpreadsheetCorruptor,
+#     MissingnessCorruptor,
+#     HeaderCorruptor,
+#     ValueCorruptor,
+#     DependencyBreaker,
+# )
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +46,9 @@ class DataCorruptor:
         random_seed: int = 42,
         target_ontology: Optional[Dict[str, Any]] = None,
         break_expressions: bool = True,
-        return_log: bool = True
+        return_log: bool = True,
+        enable_business_chaos: bool = False,
+        enable_trust_chaos: bool = False
     ) -> Tuple[pd.DataFrame, Dict[str, str], List[Dict]]:
         """
         参数：
@@ -68,20 +77,36 @@ class DataCorruptor:
         ground_truth = header_gt.copy()
 
         # 2. 人类错误
+        messy_df = messy_df.reset_index(drop=True)
         messy_df = HumanCorruptor.corrupt(messy_df, poison_ratio, log)
 
         # 3. 电子表格问题
+        messy_df = messy_df.reset_index(drop=True)
         messy_df = SpreadsheetCorruptor.corrupt(messy_df, poison_ratio, log)
 
         # 4. 缺失值
+        messy_df = messy_df.reset_index(drop=True)
         messy_df = MissingnessCorruptor.corrupt(messy_df, poison_ratio, log)
 
         # 5. 字段值同义词
+        messy_df = messy_df.reset_index(drop=True)
         messy_df = ValueCorruptor.corrupt(messy_df, poison_ratio, log)
 
         # 6. 依赖关系破坏
+        messy_df = messy_df.reset_index(drop=True)
         if break_expressions and target_ontology:
             messy_df = DependencyBreaker.corrupt(messy_df, target_ontology, poison_ratio, log)
+
+        if messy_df.columns.duplicated().any():
+            cols = []
+            for i, col in enumerate(messy_df.columns):
+                new_col = col
+                count = 1
+                while new_col in cols:
+                    new_col = f"{col}_{count}"
+                    count += 1
+                cols.append(new_col)
+            messy_df.columns = cols
 
         if return_log:
             return messy_df, ground_truth, log
