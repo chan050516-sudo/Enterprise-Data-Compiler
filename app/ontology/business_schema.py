@@ -42,6 +42,7 @@ class DatasetLevelRule(BaseModel):
 class ODCSContracts(BaseModel):
     row_level_rules: List[RowLevelRule] = Field(default_factory=list)
     dataset_level_rules: List[DatasetLevelRule] = Field(default_factory=list)
+    global_invariants: List[Dict[str, Any]] = Field(default_factory=list)
 
 class EntityField(BaseModel):
     type: Literal["string", "float", "int", "boolean", "date", "datetime"]
@@ -49,6 +50,7 @@ class EntityField(BaseModel):
     description: Optional[str] = None
     fallback_strategy: FallbackStrategy = "KEEP_NULL"
     default_value: Optional[Any] = None
+    entity: Optional[str] = None
 
 class TargetOntology(BaseModel):
     dataset_name: str

@@ -119,6 +119,10 @@ class DataTrustEngine:
                             "error": f"Sum alignment failed for {target_col}. Expected: {expected}, Actual: {actual_sum}"
                         })
 
+        global_errors = self._check_global_invariants(compiled_df, target_ontology)
+        if global_errors:
+            dataset_errors.extend(global_errors)
+
         # -----------------------------------------
         # 3. Trust Score 计算与自治决策路由
         # -----------------------------------------
@@ -293,6 +297,83 @@ class DataTrustEngine:
         fail_mask = valid_mask & (diff_days > tolerance_days)
         
         return df[fail_mask].index.tolist() if fail_mask.any() else []
+
+
+    def _check_global_invariants(self, df: pd.DataFrame, target_ontology: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        检查全局不变量（跨行/跨实体约束）
+        返回与 dataset_errors 格式兼容的错误列表
+        """
+        errors = []
+        invariants = target_ontology.get("odcs_contracts", {}).get("global_invariants", [])
+        for inv in invariants:
+            inv_name = inv.get("name", "unknown")
+            inv_type = inv.get("type")
+            rule = inv.get("rule")
+            severity = inv.get("severity", "error")
+
+            try:
+                if inv_type == "double_entry":
+                    # 要求 df 包含 debit 和 credit 列
+                    if 'debit' in df.columns and 'credit' in df.columns:
+                        total_debit = df['debit'].sum()
+                        total_credit = df['credit'].sum()
+                        if not np.isclose(total_debit, total_credit, rtol=1e-6):
+                            errors.append({
+                                "rule": inv_name,
+                                "error": f"Double entry violation: debit={total_debit}, credit={total_credit}",
+                                "severity": severity
+                            })
+                    else:
+                        logger.warning(f"Global invariant '{inv_name}' requires 'debit' and 'credit' columns, but not found.")
+
+                elif inv_type == "line_sum_consistency":
+                    # 假设 rule 是一个可求值的表达式，例如 "total_amount == line_amount_sum"
+                    # 要求 df 中包含表达式所需的列
+                    try:
+                        # 使用 df.eval 逐行检查
+                        if not df.eval(rule).all():
+                            errors.append({
+                                "rule": inv_name,
+                                "error": f"Line sum consistency violation: {rule}",
+                                "severity": severity
+                            })
+                    except Exception as e:
+                        logger.warning(f"Line sum consistency check failed for '{inv_name}': {e}")
+
+                elif inv_type == "inventory_non_negative":
+                    # 假设 df 包含 product_id 和 quantity 列
+                    if 'product_id' in df.columns and 'quantity' in df.columns:
+                        grouped = df.groupby('product_id')['quantity'].sum()
+                        negative_products = grouped[grouped < 0].index.tolist()
+                        if negative_products:
+                            errors.append({
+                                "rule": inv_name,
+                                "error": f"Inventory non‑negative violation for products: {negative_products}",
+                                "severity": severity
+                            })
+                    else:
+                        logger.warning(f"Global invariant '{inv_name}' requires 'product_id' and 'quantity' columns, but not found.")
+
+                elif inv_type == "custom":
+                    # 自定义表达式，直接使用 df.eval，要求返回布尔值
+                    try:
+                        if not df.eval(rule).all():
+                            errors.append({
+                                "rule": inv_name,
+                                "error": f"Custom invariant violation: {rule}",
+                                "severity": severity
+                            })
+                    except Exception as e:
+                        logger.warning(f"Custom invariant '{inv_name}' evaluation failed: {e}")
+
+                else:
+                    logger.warning(f"Unsupported global invariant type: {inv_type}")
+
+            except Exception as e:
+                logger.error(f"Error checking global invariant '{inv_name}': {e}")
+
+        return errors
 
     # ==========================================
     # 报告组装

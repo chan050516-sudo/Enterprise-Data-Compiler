@@ -124,21 +124,46 @@ Output schema profile JSON (Example):
 }
 
 ---
-### LAYER 3 — SEMANTIC POLICY ENGINE & ONTOLOGY
-Purpose: Define target structured business schema, ODCS (Open Data Contract Standard) constraints, and business-level semantics.
-Structure: 
-- Fields definitions (logical types)
-- Semantic Policies (Fallback strategies for missing values like KEEP_NULL, USE_ZERO, HALT).
-- ODCS Contracts (Complex mathematical expressions, volume conservation, and tolerance windows for asynchronous business delays).
-*Also acts as the host for the Mapping Registry (Historical mapping memory).*
+
+### LAYER 2.5 — SCHEMA INTROSPECTION (BRIDGE TO DOWNSTREAM SYSTEMS)
+Purpose: Dynamically discover the output schema of a target ERP/accounting system (SAP, AutoCount, Oracle, POS, etc.).
+Mechanism: Connects to the system’s database or API, reads table structures, column names, data types, primary/foreign keys, and constraints.
+Output: Vendor Schema Graph – a machine‑readable representation of the system’s expected data structure.
+This graph is then used by Layer 3 Adapters to produce mapping hints and validate the final output.
+
+---
+### LAYER 3 — SEMANTIC POLICY ENGINE & ONTOLOGY & ADAPTERS
+
+**Purpose**: Provide semantic grounding for the compiler. Separates stable business concepts from system-specific target structures.
+
+**Canonical Ontology** (stable semantic layer):
+- Defines cross‑ERP business entities (e.g., `BusinessPartner`, `Product`, `CommercialDocument`, `JournalEntry`).
+- Acts as the **coordinate system** for all mapping and evaluation.
+- Human‑maintained JSON file (`canonical_ontology.json`).
+
+**Target Ontology** (system‑specific output schema):
+- Represents the exact structure expected by a downstream ERP (SAP, AutoCount, POS, etc.).
+- **Discovered dynamically** via **Schema Introspection** (reading tables/fields/types/constraints from the target system).
+- Contains fields, types, ODCS contracts (row‑level & global invariants), and fallback policies.
+
+**Adapter** (per‑system mapping component):
+- One adapter per downstream system (e.g., `SAPAdapter`, `AutoCountAdapter`).
+- Provides:
+  - `introspect_schema()` → returns Vendor Schema Graph.
+  - `mapping_hints` (source → canonical field) – manually curated or LLM‑assisted.
+- Enables LLM to generate IR even when hints are incomplete (semantic inference on values).
+
+**Mapping Registry**: Historical mapping memory (optional, domain‑specific).
 
 ---
 
 ### LAYER 4 — LLM MAPPING ENGINE (CRITICAL)
 Input: 
 1. Semantic Profile (from Layer 2)
-2. Target Ontology & ODCS Contracts (from Layer 3)
-3. Historical Mapping Hints (from Mapping Registry)
+2. Canonical Ontology (from Layer 3) – defines the semantic coordinate space.
+3. Target Ontology (optional) – if provided, the final IR must conform to it; otherwise, IR targets the Canonical Ontology.
+4. Adapter Mapping Hints (source → canonical) – from the corresponding system adapter.
+5. Historical Mapping Hints (from Mapping Registry – optional).
 Output: Strict Transformation IR (Intermediate Representation) JSON.  
 - Must specify target fields, trusted operations (COPY, CONCAT, ADD, etc.), and typed input arguments (COLUMN_REF or LITERAL).
 - Absolutely no code blocks or dynamic expressions allowed.

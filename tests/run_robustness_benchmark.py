@@ -160,6 +160,33 @@ def main():
     load_dotenv()
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # 获取干净数据
+    if args.clean_data:
+        clean_df = load_clean_data(args.clean_data)
+        logger.info(f"Loaded clean data from {args.clean_data}: {len(clean_df)} rows, {len(clean_df.columns)} cols")
+    else:
+        # 生成数据
+        from utils.data_generator import OntologyDataGenerator
+        with open(args.ontology_file, 'r') as f:
+            ontology_dict = json.load(f)
+        clean_df = OntologyDataGenerator.generate(ontology_dict, num_rows=args.num_rows, random_seed=args.seed)
+        logger.info(f"Generated clean data from {args.ontology_file}: {len(clean_df)} rows, {len(clean_df.columns)} cols")
+
+    # 确定目标本体
+    if args.ontology_name == "auto":
+        # 如果提供了 clean-data，则自动提取；否则从 ontology_file 构建 TargetOntology 格式
+        if args.clean_data:
+            ontology = OntologyExtractor.from_dataframe(clean_df, dataset_name="auto_benchmark")
+        else:
+            # 将 ontology_file 的内容直接作为目标 ontology（它本身就是 TargetOntology 格式）
+            with open(args.ontology_file, 'r') as f:
+                ontology = json.load(f)
+            logger.info("Using ontology file directly as target ontology (generated data already complies)")
+    else:
+        registry = OntologyRegistryManager(args.registry)
+        ontology = registry.get_ontology(args.ontology_name)
+        logger.info(f"Loaded ontology '{args.ontology_name}' from registry")
+
     # 加载干净数据
     clean_df = load_clean_data(args.clean_data)
     logger.info(f"Loaded clean data: {len(clean_df)} rows, {len(clean_df.columns)} cols")
