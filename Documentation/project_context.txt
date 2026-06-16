@@ -64,36 +64,6 @@ You MUST implement all layers as separate modules.
 
 ---
 
-### LAYER 0 — DATA CHAOS & BENCHMARK MATRIX (THE MOAT)
-Purpose: Generate deterministic, realistic data anomalies to test LLM semantic understanding and Layer 5 validation boundaries.
-Mechanism: Two complementary modes of chaos generation:
-
-1. **Atomic Corruptors** (for fine-grained robustness testing):
-   - HeaderCorruptor: Column name drift (synonyms, case, prefixes, abbreviations)
-   - HumanCorruptor: Typing errors (keyboard proximity, case, spaces, abbreviations with weights)
-   - SpreadsheetCorruptor: Excel/CSV artifacts (serial dates, auto‑parsing, scientific notation, leading zero loss, boolean pollution)
-   - MissingnessCorruptor: NULLs, empty strings, zero filling
-   - ValueCorruptor: Field value synonyms (e.g., "Walk In" → "Walkin")
-   - DependencyBreaker: Expression violations and date tolerance breaches
-
-2. **Business Scenarios** (real-world data incidents):
-   - Duplicate Import: Entire file duplicated (e.g., month‑end reconciliation error)
-   - Month‑end Truncation: Export only first 80% of rows
-   - Schema Evolution: Column additions, deletions, and renaming
-   - Cross‑source Conflict: Value disagreements between POS and ERP
-   - Delayed Reporting: Date shifts (e.g., 7 days late)
-   - Aggregate Mismatch: Group totals inconsistent with line items
-
-All corruptors and scenarios are unified under a single benchmark runner (`tests/run_robustness_benchmark.py`) that:
-- Accepts clean data and automatically extracts target ontology (if not provided)
-- Produces `(messy_df, ground_truth, corruption_log)`
-- Executes the full 8‑layer compilation pipeline
-- Computes IR accuracy (schema/operator scores), trust score, and (planned) per‑corruption detection/repair rates.
-
-The **Mapping Benchmark Arena** tracks and compares IR generation accuracy across different LLM backends against the ground‑truth matrix.
-
----
-
 ### LAYER 1 — CONNECTORS
 Purpose: Load raw enterprise data.
 Support: CSV，Excel
@@ -236,6 +206,38 @@ run_pipeline(input_file, target_ontology, max_retries=2):
         
     route unhealable anomalous records to Quarantine DB (Layer 7)
 ```
+
+---
+
+---
+
+### DATA CHAOS & BENCHMARK MATRIX (THE MOAT)
+Purpose: Generate deterministic, realistic data anomalies to test LLM semantic understanding and Layer 5 validation boundaries.
+Mechanism: Two complementary modes of chaos generation:
+
+1. **Atomic Corruptors** (for fine-grained robustness testing):
+   - HeaderCorruptor: Column name drift (synonyms, case, prefixes, abbreviations)
+   - HumanCorruptor: Typing errors (keyboard proximity, case, spaces, abbreviations with weights)
+   - SpreadsheetCorruptor: Excel/CSV artifacts (serial dates, auto‑parsing, scientific notation, leading zero loss, boolean pollution)
+   - MissingnessCorruptor: NULLs, empty strings, zero filling
+   - ValueCorruptor: Field value synonyms (e.g., "Walk In" → "Walkin")
+   - DependencyBreaker: Expression violations and date tolerance breaches
+
+2. **Business Scenarios** (real-world data incidents):
+   - Duplicate Import: Entire file duplicated (e.g., month‑end reconciliation error)
+   - Month‑end Truncation: Export only first 80% of rows
+   - Schema Evolution: Column additions, deletions, and renaming
+   - Cross‑source Conflict: Value disagreements between POS and ERP
+   - Delayed Reporting: Date shifts (e.g., 7 days late)
+   - Aggregate Mismatch: Group totals inconsistent with line items
+
+All corruptors and scenarios are unified under a single benchmark runner (`tests/run_robustness_benchmark.py`) that:
+- Accepts clean data and automatically extracts target ontology (if not provided)
+- Produces `(messy_df, ground_truth, corruption_log)`
+- Executes the full 8‑layer compilation pipeline
+- Computes IR accuracy (schema/operator scores), trust score, and (planned) per‑corruption detection/repair rates.
+
+The **Mapping Benchmark Arena** tracks and compares IR generation accuracy across different LLM backends against the ground‑truth matrix.
 
 ---
 
