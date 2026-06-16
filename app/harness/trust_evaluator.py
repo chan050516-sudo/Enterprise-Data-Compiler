@@ -155,8 +155,8 @@ class DataTrustEngine:
         
         if trust_score >= 0.95 and quarantine_count == 0:
             return round(trust_score, 4), "PASS"
-        elif trust_score >= 0.80:
-            return round(trust_score, 4), "AUTO_HEAL" 
+        # elif trust_score >= 0.80:
+        #    return round(trust_score, 4), "AUTO_HEAL" 
         else:
             return round(trust_score, 4), "QUARANTINE" 
 

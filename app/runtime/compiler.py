@@ -130,10 +130,21 @@ class IRCompiler:
         return pd.to_numeric(cleaned_str, errors='coerce')
         
     def _op_fuzzy_map(self, args, opts):
-        res = args[0].astype(str).str.strip().str.upper()
-        if opts and "mapping_dict" in opts:
-            res = res.map(opts["mapping_dict"]).fillna(res)
-        return res
+        series = args[0].astype(str).str.strip().str.upper()
+        mapping_dict = opts.get("mapping_dict", {})
+        if not mapping_dict:
+            return series
+        
+        # 构建键的列表（规范化）
+        keys = list(mapping_dict.keys())
+        # 对每个唯一值进行模糊匹配
+        def fuzzy_map(val):
+            if val in mapping_dict:
+                return mapping_dict[val]
+            matches = difflib.get_close_matches(val, keys, n=1, cutoff=0.8)
+            return mapping_dict[matches[0]] if matches else val
+        
+        return series.map(fuzzy_map).fillna(series)
         
     def _op_resolve_entities(self, args, opts):
         series = args[0]

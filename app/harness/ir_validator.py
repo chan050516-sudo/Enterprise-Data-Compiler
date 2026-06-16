@@ -98,6 +98,18 @@ class IRValidator:
                 errors.append(f"[{node_context}] Operator 'WINDOW_APPLY' requires 'function' and 'target_column' in options.")
             elif op == "VALUE_LOOKUP" and (not node.options or ("mapping_dict" not in node.options and "xref_name" not in node.options)):
                 errors.append(f"[{node_context}] Operator 'VALUE_LOOKUP' requires 'mapping_dict' or 'xref_name' in options.")
+            elif op == "CALCULATE_HIERARCHY":
+                if not node.options or "id_col" not in node.options or "parent_id_col" not in node.options:
+                    errors.append(f"[{node_context}] Operator 'CALCULATE_HIERARCHY' requires 'id_col' and 'parent_id_col' in options.")
+            elif op == "CASE_WHEN":
+                if not node.options or "cases" not in node.options:
+                    errors.append(f"[{node_context}] Operator 'CASE_WHEN' requires 'cases' in options.")
+            elif op == "PIVOT":
+                if not node.options or "index" not in node.options or "columns" not in node.options or "values" not in node.options:
+                    errors.append(f"[{node_context}] Operator 'PIVOT' requires 'index', 'columns', and 'values' in options.")
+            elif op == "UNPIVOT":
+                if not node.options or "id_vars" not in node.options or "value_vars" not in node.options:
+                    errors.append(f"[{node_context}] Operator 'UNPIVOT' requires 'id_vars' and 'value_vars' in options.")
 
         # 2. Validate the intermidiate step nodes
         for step_name, node in ir_spec.intermediate_steps.items():
@@ -111,11 +123,11 @@ class IRValidator:
 
         group_by_steps = [name for name, node in ir_spec.intermediate_steps.items() if node.operation == "GROUP_BY"]
         if group_by_steps:
-            # 检查是否有其他步骤引用了这些 GROUP_BY 节点
-            for step_name, node in ir_spec.intermediate_steps.items():
+            # 检查是否有其他步骤引用了这些 GROUP_BY 步骤
+            for target_col, node in ir_spec.output_mappings.items():
                 for arg in node.inputs:
                     if arg.type == "STEP_REF" and arg.value in group_by_steps:
-                        errors.append(f"GROUP_BY step '{arg.value}' is used as input to another step. This is not allowed because GROUP_BY changes row count. Use GROUP_BY only in output_mappings.")
+                        errors.append(f"[Output: {target_col}] Cannot reference GROUP_BY step '{arg.value}' in output mapping because GROUP_BY changes row count.")
 
         if errors:
             logger.error("IR Topology Validation Failed.")

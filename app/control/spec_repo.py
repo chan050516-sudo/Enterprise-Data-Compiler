@@ -91,3 +91,31 @@ class SpecRepository:
                 SET status = 'ARCHIVED' 
                 WHERE domain = ? AND status = 'LOCKED' AND spec_id != ?
             """, (domain, exclude_spec_id))
+
+    def promote_to_locked(self, spec_id: str, approver_id: str, approved_at: str) -> None:
+        """
+        原子地将指定 spec 转为 LOCKED，并归档同域其他 LOCKED 规格。
+        确保同一 domain 只有一个 LOCKED 规格。
+        """
+        with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                # 1. 更新当前 spec 为 LOCKED
+                conn.execute("""
+                    UPDATE mapping_specs 
+                    SET status = 'LOCKED', approved_by = ?, approved_at = ?
+                    WHERE spec_id = ?
+                """, (approver_id, approved_at, spec_id))
+                
+                # 2. 归档同域其他 LOCKED 规格（排除自身）
+                conn.execute("""
+                    UPDATE mapping_specs 
+                    SET status = 'ARCHIVED' 
+                    WHERE domain = (SELECT domain FROM mapping_specs WHERE spec_id = ?)
+                    AND status = 'LOCKED' AND spec_id != ?
+                """, (spec_id, spec_id))
+                
+                conn.execute("COMMIT")
+            except Exception as e:
+                conn.execute("ROLLBACK")
+                raise RuntimeError(f"Atomic promotion to LOCKED failed: {e}")

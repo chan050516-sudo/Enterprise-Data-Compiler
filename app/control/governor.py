@@ -64,19 +64,21 @@ class SpecGovernor:
         if spec.status not in ["DRAFT", "PENDING_APPROVAL"]:
             raise StateTransitionError(f"Cannot approve spec in {spec.status} state.")
 
-        # 1. 更新当前 Spec 为 LOCKED
+        # 更新当前 Spec 为 LOCKED
         spec.status = "LOCKED"
         spec.approved_by = approver_id
         spec.approved_at = datetime.now(timezone.utc).isoformat()
         
-        # 2. 持久化当前 Spec
-        self.repo.save(spec)
+        # 准备元数据
+        approved_at = datetime.now(timezone.utc).isoformat()
         
-        # 3. 强制退役（ARCHIVE）该 Domain 下所有旧版本的 LOCKED 契约
-        self.repo.archive_all_locked_for_domain(domain=spec.domain, exclude_spec_id=spec.spec_id)
+        # 原子持久化
+        self.repo.promote_to_locked(spec_id, approver_id, approved_at)
         
+        # 重新加载最新状态
         logger.warning(f"🔒 CONGRATULATIONS: Spec {spec_id} is LOCKED by {approver_id}. It is now live for execution.")
-        return spec
+        return self.repo.get_by_id(spec_id)
+
 
     def reject(self, spec_id: str, approver_id: str, reason: str) -> MappingSpec:
         """驳回 (PENDING_APPROVAL -> DRAFT)"""

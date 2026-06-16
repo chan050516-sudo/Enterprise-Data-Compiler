@@ -16,7 +16,6 @@ from app.control.spec_repo import SpecRepository
 # --- Layer 7: Review Engine ---
 from app.review.quarantine_viewer import QuarantineViewer
 # --- Layer 8: Output Persistence ---
-from app.output.sqlite_writer import SQLiteWriter
 from app.output.exporter import SecondaryExporter
 # --- Core Orchestrator (Execution Plane) ---
 from app.execution.orchestrator import PipelineOrchestrator
@@ -104,10 +103,10 @@ def main():
         source_df = connector.read_data()
         
         # 5. 初始化执行平面中枢 (注入目标数据库路径，交由编排器内部处理写库与 Saga 冲销)
-        orchestrator = PipelineOrchestrator(db_connection_string=args.db_out)
+        orchestrator = PipelineOrchestrator(db_path=args.db_out)
 
         # 6. 🚀 点火：执行核心自治流水线
-        clean_df, quarantine_df, audit_report = orchestrator.run_pipeline(
+        clean_df, quarantine_df, audit_report, lifecycle = orchestrator.run_pipeline(
             source_df=source_df,
             active_spec=active_spec,
             target_ontology=target_ontology,
