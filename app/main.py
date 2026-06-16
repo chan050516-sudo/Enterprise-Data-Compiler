@@ -18,7 +18,7 @@ from app.review.quarantine_viewer import QuarantineViewer
 from app.output.sqlite_writer import SQLiteWriter
 from app.output.exporter import SecondaryExporter
 # --- Core Orchestrator ---
-from app.pipeline.orchestrator import PipelineOrchestrator
+from app.execution.orchestrator import PipelineOrchestrator
 
 # ==========================================
 # 1. 生产级日志配置 (Audit Logging)

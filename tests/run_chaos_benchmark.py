@@ -22,7 +22,7 @@ load_dotenv()
 from app.chaos.engine import ChaosEngine
 from app.llm.llm_client import GeminiClient
 from app.ontology.business_schema import OntologyRegistryManager
-from app.pipeline.orchestrator import PipelineOrchestrator
+from app.execution.orchestrator import PipelineOrchestrator
 from app.chaos.benchmark_metrics import MappingBenchmarkArena
 
 # 配置日志（同时输出到控制台）

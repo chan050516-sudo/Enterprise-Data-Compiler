@@ -22,7 +22,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from app.llm.llm_client import GeminiClient
-from app.pipeline.orchestrator import PipelineOrchestrator
+from app.execution.orchestrator import PipelineOrchestrator
 from app.ontology.business_schema import OntologyRegistryManager
 from app.chaos.data_corruptor import DataCorruptor
 from app.chaos.scenario_runner import run_scenario
@@ -91,7 +91,7 @@ def run_scenario_benchmark(clean_df: pd.DataFrame, target_ontology: Dict, config
 def _run_pipeline_and_evaluate(messy_df: pd.DataFrame, target_ontology: Dict, ground_truth: Dict, config: Dict) -> Dict:
     """执行编译流水线并返回评估指标和审计报告"""
     from app.llm.llm_client import GeminiClient
-    from app.pipeline.orchestrator import PipelineOrchestrator
+    from app.execution.orchestrator import PipelineOrchestrator
     from app.chaos.benchmark_metrics import MappingBenchmarkArena
     from app.harness.report import TrustAuditReport
 
