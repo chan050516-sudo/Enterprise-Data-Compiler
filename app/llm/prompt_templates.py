@@ -42,6 +42,13 @@ You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibi
    - Use REGEX_EXTRACT / REPLACE for complex text pattern manipulation.
    - Use FILLNA (options: 'method' or 'value') for forward/backward or static null imputation.
 
+【CRITICAL ARCHITECTURE RULE - TWO-PHASE MAPPING】:
+1. PHASE 1 (Semantic Normalization): You MUST first create intermediate steps that map source columns to the **Canonical Ontology** field names (e.g., `canonical_partner_id`, `canonical_amount`). Use the Canonical field names as intermediate step names (e.g., `step_canonical_partner_id`).
+2. PHASE 2 (Physical Adaptation): The `output_mappings` MUST then copy/transform these canonical intermediate steps into the physical `Target Ontology` fields.
+3. Never map source columns directly to physical target columns unless the target field exactly matches the canonical field name.
+4. In `intermediate_steps`, always prefer using `STEP_REF` from source columns first, then apply business transformations (e.g., CLEAN_CURRENCY) to produce canonical values.
+5. In `output_mappings`, use `STEP_REF` to reference the canonical intermediate steps you just built.
+
 【FEW-SHOT STRUCTURAL EXAMPLE】:
 If Source has 'amount_str' and Target needs 'total_tax' (amount * 0.06) and a missing mandatory 'profit_center':
 {
@@ -79,6 +86,7 @@ If Source has 'amount_str' and Target needs 'total_tax' (amount * 0.06) and a mi
 # ==========================================
 def build_mapping_prompt(
     source_schema: Dict[str, Any], 
+    canonical_ontology: Dict[str, Any],
     target_ontology: Dict[str, Any],
     mapping_hints: Optional[List[Dict[str, Any]]] = None
 ) -> str:
@@ -88,8 +96,11 @@ def build_mapping_prompt(
         "Align the incoming Source Schema to the Target Business Ontology by creating an intermediate execution graph.",
         "\n【Incoming Source Schema (Enhanced with Semantic Profiling)】:",
         json.dumps(source_schema, indent=2),
-        "\n【Target Business Ontology & ODCS Contracts】:",
-        json.dumps(target_ontology, indent=2)
+        "\n【Canonical Enterprise Model (The Semantic Standard)】:",
+        json.dumps(canonical_ontology, indent=2),
+        "\n【Physical Target System (ERP Specific)】:",
+        json.dumps(target_ontology, indent=2),
+        "\n【Instruction】: First build `intermediate_steps` that map source columns to Canonical concepts, then use `output_mappings` to adapt those canonical steps to the Physical Target fields. Use `STEP_REF` to reference intermediate steps in outputs."
     ]
 
     if mapping_hints:

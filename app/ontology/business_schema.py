@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 FallbackStrategy = Literal["KEEP_NULL", "USE_ZERO", "HALT", "DEFAULT_STRING"]
 
 # ==========================================
-# 1. ODCS 契约元模型 (Meta-Models)
+# 1. ODCS Meta-Models
 # 作用：校验 JSON 配置文件本身的合法性
 # ==========================================
 

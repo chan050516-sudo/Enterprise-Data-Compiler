@@ -37,18 +37,21 @@ class SemanticMapper:
     
     def generate_spec( # generate IR -> generate spec
         self, 
-        source_schema: Dict[str, Any], 
-        target_ontology: Dict[str, Any],
+        source_schema: Dict[str, Any],
+        canonical_ontology: Dict[str, Any] = None, 
+        target_ontology: Dict[str, Any] = None,
         mapping_hints: Optional[List[Dict[str, Any]]] = None,
         patch_version: str = "v1.0",           # [新增]: 版本注入
         parent_spec_id: Optional[str] = None   # [新增]: 血缘追踪
     ) -> MappingSpec: # [修改]: 返回值变更为 MappingSpec
         
+        effective_canonical = canonical_ontology or target_ontology
         heuristic_hints = self._generate_heuristic_hints(source_schema, target_ontology)
         combined_hints = (mapping_hints or []) + heuristic_hints
 
         user_prompt = build_mapping_prompt(
             source_schema=source_schema,
+            canonical_ontology=effective_canonical,
             target_ontology=target_ontology,
             mapping_hints=combined_hints if combined_hints else None
         )

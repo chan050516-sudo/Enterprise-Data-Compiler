@@ -10,6 +10,7 @@ class Config:
     # Paths
     SAMPLE_DATA_DIR = BASE_DIR / "tests" / "sample_data"
     ONTOLOGY_DIR = BASE_DIR / "app" / "ontology"
+    CANONICAL_ONTOLOGY_PATH = BASE_DIR / "app" / "ontology" / "canonical_ontology.json"
     
     # LLM Settings
     LLM_TEMPERATURE = 0.0  # For Deterministic Output

@@ -6,6 +6,7 @@ import logging
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+from app.config.settings import settings
 
 # --- Layer 1: Connectors ---
 from app.connectors.csv_connector import CSVConnector
@@ -84,6 +85,8 @@ def main():
         logger.info("[Init] Booting Ontology Registry Manager...")
         registry = OntologyRegistryManager(args.registry_file)
         target_ontology = registry.get_ontology(args.target_ontology)
+        with open(settings.CANONICAL_ONTOLOGY_PATH, 'r', encoding='utf-8') as f:
+            canonical_ontology = json.load(f)
 
         # 3. 连接控制平面，提取绝对锁定的 MappingSpec
         logger.info(f"[Init] Fetching LOCKED MappingSpec for domain: {args.domain}")
