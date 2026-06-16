@@ -47,6 +47,9 @@ class ReconciliationEngine:
                     self._reconcile_line_sum(df, audit_report, inv)
                 elif inv_type == "inventory_valuation":
                     self._reconcile_inventory_valuation(df, audit_report, inv)
+                # [新增] 层级汇总核销
+                elif inv_type == "recursive_rollup":
+                    self._reconcile_recursive_rollup(df, audit_report, inv)
             except Exception as e:
                 logger.error(f"Reconciliation crashed on invariant '{inv_name}': {str(e)}")
                 self._flag_dataset_error(audit_report, inv_name, f"Reconciliation execution failure: {str(e)}")
@@ -191,3 +194,39 @@ class ReconciliationEngine:
             else:
                 error_penalty = (report.quarantined_rows_count / report.total_rows) * 1.0
                 report.trust_score = max(0.0, report.trust_score - error_penalty)
+
+    def _reconcile_recursive_rollup(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any]):
+        """
+        递归对账 (BOM / Chart of Accounts)：
+        断言：节点的汇总金额 (total_col) 必须严格等于 其自身金额 (value_col) + 所有直接子节点汇总金额之和 (children's total_col)
+        """
+        inv_name = inv.get("name", "recursive_rollup")
+        id_col = inv.get("id_column")
+        parent_col = inv.get("parent_id_column")
+        value_col = inv.get("value_column")  # 节点自身价值
+        total_col = inv.get("total_column")  # 节点最终汇总价值
+
+        if not all(col in df.columns for col in [id_col, parent_col, value_col, total_col]):
+            return
+
+        # 1. 计算每个节点下，其所有【直接子节点】的 total_col 之和
+        children_sum = df.groupby(parent_col)[total_col].sum().to_dict()
+
+        # 2. 对账核销函数
+        def check_node_balance(row):
+            expected_total = float(row[value_col]) + children_sum.get(row[id_col], 0.0)
+            return np.isclose(float(row[total_col]), expected_total, atol=1e-4)
+
+        # 3. 执行全景校验
+        valid_mask = df.apply(check_node_balance, axis=1)
+        violators = df[~valid_mask].index.tolist()
+
+        if violators:
+            # 同样实行家族连坐制（发生错乱的分支必须全量隔离，防止 ERP 树状崩塌）
+            report.quarantine_indices.extend(violators)
+            report.errors.append({
+                "column": total_col,
+                "rule": inv_name,
+                "affected_rows": len(violators),
+                "error_message": f"Recursive Rollup Variance: {len(violators)} nodes failed parent-child sum balancing."
+            })

@@ -26,7 +26,9 @@ class IRNode(BaseModel):
         # 关系代数与高阶表达算子
         "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY", "FILTER", "EXPLODE",
         # 图灵完备级 SQL 算子
-        "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT"
+        "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT",
+        # 递归与图计算算子
+        "CALCULATE_HIERARCHY"
     ]
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"

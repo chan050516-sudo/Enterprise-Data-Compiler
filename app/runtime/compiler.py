@@ -53,7 +53,9 @@ class IRCompiler:
             "PIVOT": self._op_pivot,
             "UNPIVOT": self._op_unpivot,
             "ORDER_BY": self._op_order_by,
-            "LIMIT": self._op_limit
+            "LIMIT": self._op_limit,
+
+            "CALCULATE_HIERARCHY": self._op_calc_hierarchy
         }
 
     # ==========================================
@@ -276,6 +278,44 @@ class IRCompiler:
 
     def _op_limit(self, args, opts):
         return args[0].head(opts.get("n", 100))
+    
+    # 追加至 app/runtime/compiler.py
+
+    def _op_calc_hierarchy(self, args, opts):
+        """
+        图计算核心：将扁平表推断为树，生成 __tree_depth__ 拓扑标识，并阻断无限死循环。
+        options 必填参数: id_col (节点ID), parent_id_col (父节点ID)
+        """
+        df_in = args[0].copy()
+        id_col = opts.get("id_col")
+        parent_col = opts.get("parent_id_col")
+        depth_col = opts.get("depth_col", "__tree_depth__")
+
+        if not id_col or not parent_col:
+            raise ValueError("CALCULATE_HIERARCHY requires 'id_col' and 'parent_id_col'.")
+
+        # 初始化深度为 -1 (未访问)
+        df_in[depth_col] = -1
+        current_depth = 0
+
+        # 寻找根节点 (Root Nodes)：父ID为空，或者父ID不在当前数据集内
+        valid_ids = set(df_in[id_col].dropna())
+        roots_mask = df_in[parent_col].isna() | ~df_in[parent_col].isin(valid_ids)
+        df_in.loc[roots_mask, depth_col] = current_depth
+
+        # 广度优先遍历 (BFS) 计算层级
+        while (df_in[depth_col] == current_depth).any():
+            current_parents = df_in[df_in[depth_col] == current_depth][id_col]
+            current_depth += 1
+            # 找到父节点是上一层的记录，且尚未被分配深度的子节点
+            children_mask = df_in[parent_col].isin(current_parents) & (df_in[depth_col] == -1)
+            df_in.loc[children_mask, depth_col] = current_depth
+
+        # 防环路断言 (VALIDATE_ACYCLIC)：如果 BFS 结束后仍有数据的深度是 -1，说明存在互相引用的脏数据死循环
+        if (df_in[depth_col] == -1).any():
+            raise CompilationError(f"Fatal Acyclic Violation: Circular reference detected in hierarchical data on column '{parent_col}'.")
+
+        return df_in
 
     # ==========================================
     # 执行路由与主控 (完全保留原版的防御机制与策略注入)

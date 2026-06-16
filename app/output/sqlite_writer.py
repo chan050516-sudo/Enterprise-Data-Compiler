@@ -119,6 +119,27 @@ class SQLiteWriter:
         columns_to_insert = [col for col in fields_config.keys() if col in sanitized_df.columns]
         placeholders = ", ".join(["?"] * len(columns_to_insert))
         insert_query = f'INSERT INTO "{table_name}" ({", ".join([f'"{c}"' for c in columns_to_insert])}) VALUES ({placeholders});'
-        data_matrix = sanitized_df[columns_to_insert].values.tolist()
-        cursor.executemany(insert_query, data_matrix)
-        return len(data_matrix)
+        
+        total_inserted = 0
+        
+        # [核心改动]: 嗅探是否存在拓扑标识
+        if "__tree_depth__" in sanitized_df.columns:
+            logger.info(f"Hierarchical topology detected. Executing Top-Down Chunked Commit to prevent FK Deadlocks...")
+            max_depth = int(sanitized_df["__tree_depth__"].max())
+            
+            for depth in range(max_depth + 1):
+                chunk = sanitized_df[sanitized_df["__tree_depth__"] == depth]
+                if chunk.empty:
+                    continue
+                
+                data_matrix = chunk[columns_to_insert].values.tolist()
+                cursor.executemany(insert_query, data_matrix)
+                total_inserted += len(data_matrix)
+                logger.debug(f" - Inserted Depth {depth} chunk: {len(data_matrix)} records.")
+        else:
+            # 标准的扁平表写入
+            data_matrix = sanitized_df[columns_to_insert].values.tolist()
+            cursor.executemany(insert_query, data_matrix)
+            total_inserted += len(data_matrix)
+
+        return total_inserted
