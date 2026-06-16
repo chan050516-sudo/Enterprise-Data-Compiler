@@ -28,7 +28,9 @@ class IRNode(BaseModel):
         # 图灵完备级 SQL 算子
         "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT",
         # 递归与图计算算子
-        "CALCULATE_HIERARCHY"
+        "CALCULATE_HIERARCHY", 
+        # 强业务价值映射字典算子
+        "VALUE_LOOKUP" 
     ]
     inputs: List[IRArgument]
     target_type: Optional[str] = "string"
@@ -60,11 +62,13 @@ class MappingSpec(BaseModel):
     ir_graph: AdvancedTransformationIR
     
     # 溯源与血缘 (Lineage)
+    global_constants: Dict[str, Any] = Field(default_factory=dict, description="全局系统缺省值与环境变量")
+
     created_by: str = Field(default="AI_COPROCESSOR", description="AI 或是具体员工工号")
     created_at: str = Field(default_factory=_generate_utc_now)
     approved_by: Optional[str] = None
     approved_at: Optional[str] = None
-    parent_spec_id: Optional[str] = Field(default=None, description="若是 AI 根据失败记录生成的 Patch，需指向原挂掉的 Spec ID")
+    parent_spec_id: Optional[str] = Field(default=None, description="若是 AI 根据失败记录生成的 Patch, 需指向原挂掉的 Spec ID")
     rejection_reason: Optional[str] = None
 
     def is_executable(self) -> bool:

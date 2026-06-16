@@ -51,7 +51,13 @@ class PipelineOrchestrator:
         # Compilation Plane
         logger.info("[Compilation Plane] Validating IR Topology & Executing...")
         IRValidator.validate_topology(active_spec.ir_graph, list(source_df.columns), target_ontology)
-        compiled_df = self.compiler.compile(source_df, active_spec.ir_graph, target_ontology)
+        compiled_df = self.compiler.compile(
+            source_df=source_df, 
+            ir=active_spec.ir_graph, 
+            target_ontology=target_ontology,
+            extra_tables=reference_data,               # 透传给 VALUE_LOOKUP
+            global_constants=active_spec.global_constants # 透传数据增补矩阵
+        )
         lifecycle.transition_to(BatchState.COMPILED, "Vectorized compilation finished.")
 
         # State: COMPILED -> RECONCILED

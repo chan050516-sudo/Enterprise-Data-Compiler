@@ -96,6 +96,8 @@ class IRValidator:
                 errors.append(f"[{node_context}] Operator 'REPLACE' requires 'pattern' in options.")
             elif op == "WINDOW_APPLY" and (not node.options or "function" not in node.options or "target_column" not in node.options):
                 errors.append(f"[{node_context}] Operator 'WINDOW_APPLY' requires 'function' and 'target_column' in options.")
+            elif op == "VALUE_LOOKUP" and (not node.options or ("mapping_dict" not in node.options and "xref_name" not in node.options)):
+                errors.append(f"[{node_context}] Operator 'VALUE_LOOKUP' requires 'mapping_dict' or 'xref_name' in options.")
 
         # 2. Validate the intermidiate step nodes
         for step_name, node in ir_spec.intermediate_steps.items():

@@ -55,7 +55,8 @@ class IRCompiler:
             "ORDER_BY": self._op_order_by,
             "LIMIT": self._op_limit,
 
-            "CALCULATE_HIERARCHY": self._op_calc_hierarchy
+            "CALCULATE_HIERARCHY": self._op_calc_hierarchy,
+            "VALUE_LOOKUP": self._op_value_lookup
         }
 
     # ==========================================
@@ -278,8 +279,6 @@ class IRCompiler:
 
     def _op_limit(self, args, opts):
         return args[0].head(opts.get("n", 100))
-    
-    # 追加至 app/runtime/compiler.py
 
     def _op_calc_hierarchy(self, args, opts):
         """
@@ -316,6 +315,30 @@ class IRCompiler:
             raise CompilationError(f"Fatal Acyclic Violation: Circular reference detected in hierarchical data on column '{parent_col}'.")
 
         return df_in
+    
+    def _op_value_lookup(self, args, opts):
+        """
+        强业务映射算子 (XREF)
+        如果字典中找不到目标值，强制返回 NaN，交由 Layer 5 根据业务本体(not_null/HALT)进行行级隔离。
+        绝不 fallback 回源值。
+        """
+        series = args[0].astype(str).str.strip()
+        
+        # 兼容两种模式：内联小型字典，或引用外部大型 XREF 表
+        xref_dict = opts.get("mapping_dict")
+        if not xref_dict:
+            xref_name = opts.get("xref_name")
+            extra_tables = opts.get("__extra_tables__", {})
+            
+            if xref_name and xref_name in extra_tables:
+                ref_df = extra_tables[xref_name]
+                # 假设外部引用表的前两列分别是 源代码 和 目标代码
+                xref_dict = dict(zip(ref_df.iloc[:, 0].astype(str), ref_df.iloc[:, 1]))
+            else:
+                raise CompilationError("VALUE_LOOKUP requires 'mapping_dict' or valid 'xref_name' referencing extra_tables.")
+                
+        # 严格映射：不包含在字典内的 key 会变成 NaN
+        return series.map(xref_dict)
 
     # ==========================================
     # 执行路由与主控 (完全保留原版的防御机制与策略注入)
@@ -348,7 +371,11 @@ class IRCompiler:
         # ----------------------------------------------------
         if op not in self._operator_registry:
             raise NotImplementedError(f"Operator {op} is not supported by runtime compiler.")
-            
+        
+        opts = dict(node.options) if node.options else {}
+        if extra_tables:
+            opts["__extra_tables__"] = extra_tables
+
         try:
             return self._operator_registry[op](resolved_args, node.options or {})
         except Exception as e:
@@ -382,10 +409,16 @@ class IRCompiler:
 
         return sorted_steps
 
-    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None, extra_tables: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
+    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None, global_constants: Dict[str, Any] = None, extra_tables: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
         logger.info("Initializing Native Compilation & Relational Context...")
         runtime_context: Dict[str, Union[pd.Series, pd.DataFrame]] = {}
         output_df = pd.DataFrame()
+
+        if global_constants:
+            for k, v in global_constants.items():
+                # 将标量常量广播为与数据等长的 Pandas 向量 (Virtual Columns)
+                runtime_context[k] = pd.Series(v, index=source_df.index)
+                logger.debug(f"Injected Global Constant into context: {k} = {v}")
 
         execution_order = self._topological_sort(ir.intermediate_steps)
 
