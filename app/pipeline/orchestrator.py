@@ -1,4 +1,5 @@
 import logging
+import uuid
 import pandas as pd
 from typing import Dict, Any, Tuple
 
@@ -11,16 +12,24 @@ from app.harness.trust_evaluator import DataTrustEngine
 from app.harness.report import TrustAuditReport
 from app.schema.ir_model import MappingSpec
 
+from app.execution.state_machine import BatchLifecycle, BatchState
+from app.execution.reconciliation import ReconciliationEngine
+from app.execution.saga_manager import SagaManager
+from app.output.sqlite_writer import SQLiteWriter
+
 logger = logging.getLogger(__name__)
 
 class PipelineOrchestrator:
     """
     Global Orchestration Hub: 驱动 8 层数据编译流水线，包含带统计学视觉的 MAPE-K 自愈循环。
     """
-    def __init__(self, llm_client):
-        self.mapper = SemanticMapper(llm_client)
+    def __init__(self, db_path: str = "enterprise_target.db"):
+        # self.mapper = SemanticMapper(llm_client)
         self.compiler = IRCompiler()
         self.enforcer = DataTrustEngine() 
+        self.reconciler = ReconciliationEngine() # Layer 7
+        self.db_writer = SQLiteWriter(db_path=db_path) 
+        self.saga_manager = SagaManager(db_writer=self.db_writer)
 
     def run_pipeline(
         self, 
@@ -28,46 +37,65 @@ class PipelineOrchestrator:
         active_spec: MappingSpec,
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport]:
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport, BatchLifecycle]:
         
-        logger.info("--- 🚀 Starting Stateful Execution Plane ---")
+        batch_id = f"BATCH-{uuid.uuid4().hex[:8].upper()}"
+        lifecycle = BatchLifecycle(batch_id, active_spec.spec_id)
+
+        logger.info("--- 🚀 Starting Stateful Execution Plane | Batch: {batch_id} ---")
         
         # [防线 0]: 控制平面准入断言
         if not active_spec.is_executable():
             raise PermissionError(f"Execution Halted: MappingSpec {active_spec.spec_id} is in {active_spec.status} state. Must be LOCKED.")
 
-        # State: INIT -> COMPILED
-        logger.info(f"[Layer 5-P1] Validating IR static topology safety for Spec {active_spec.spec_id}...")
+        # Compilation Plane
+        logger.info("[Compilation Plane] Validating IR Topology & Executing...")
         IRValidator.validate_topology(active_spec.ir_graph, list(source_df.columns), target_ontology)
-        
-        logger.info("[Layer 6] Executing deterministic vectorized compilation...")
         compiled_df = self.compiler.compile(source_df, active_spec.ir_graph, target_ontology)
-        
+        lifecycle.transition_to(BatchState.COMPILED, "Vectorized compilation finished.")
+
         # State: COMPILED -> RECONCILED
-        logger.info("[Layer 5-P2] Evaluating Trust Score and Forensic ODCS Contracts...")
+        logger.info("[Execution Plane] Evaluating Trust Score (Layer 5-P2) and Forensic ODCS Contracts...")
         audit_report: TrustAuditReport = self.enforcer.evaluate(
             compiled_df=compiled_df, 
             target_ontology=target_ontology,
             reference_data=reference_data,
-            base_mapping_confidence=1.0 # 锁定态契约自带最高初始信任
+            # base_mapping_confidence=1.0 # 锁定态契约自带最高初始信任
         )
         
-        if audit_report.dataset_errors:
-            logger.error(f"Global Invariant / Dataset errors detected: {audit_report.dataset_errors}")
-            # 不再进行 AI 闭环，直接中断批次
-            
+        self.reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology)
+
         decision = audit_report.routing_decision
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
-        
-        # State: RECONCILED -> COMMITTED | QUARANTINED
-        if decision == "PASS":
-            logger.info(f"✅ Batch Reconciled. Trust Score: {audit_report.trust_score:.2f}. Ready for Commit.")
-        else:
-            logger.warning(f"⚠️ Batch Quarantined. Trust Score: {audit_report.trust_score:.2f}. System safely halted.")
-            # 此时可触发外部事件，唤醒 SemanticMapper 生成补丁（异步操作，不阻塞当前流水线）
 
-        logger.info(f"--- Execution Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
-        return clean_df, quarantine_df, audit_report
+        if decision == "PASS":
+            lifecycle.transition_to(BatchState.RECONCILED, "Trust Score > 0.95. Ready for commit.")
+            
+            # --- 物理副作用阶段 (Layer 8 DB 写入与 Saga 拦截) ---
+            lifecycle.transition_to(BatchState.COMMITTING)
+            try:
+                logger.info("[Layer 8] Attempting Database Commit...")
+                self.db_writer.commit(clean_df, target_ontology["dataset_name"])
+                lifecycle.transition_to(BatchState.COMMITTED, "Physical DB Commit Successful.")
+                
+            except Exception as e:
+                logger.error(f"🚨 FATAL: Database commit failed mid-way! Triggering Saga Compensation. Error: {str(e)}")
+                lifecycle.transition_to(BatchState.COMPENSATING, f"DB Crash: {str(e)}")
+                
+                # 触发 Saga 逆向冲销
+                self.saga_manager.execute_compensation(clean_df, active_spec, target_ontology)
+                
+                # 冲销完毕后，批次被安全打入隔离区
+                lifecycle.transition_to(BatchState.QUARANTINED, "Saga Compensation applied. Batch safely quarantined.")
+                # 此时：全量 clean_df 转入 quarantine_df
+                quarantine_df = pd.concat([quarantine_df, clean_df])
+                clean_df = pd.DataFrame(columns=clean_df.columns)
+        else:
+            lifecycle.transition_to(BatchState.QUARANTINED, f"Low Trust Score: {audit_report.trust_score}")
+            logger.warning("⚠️ Batch Quarantined. Generating async feedback for Control Plane...")
+            # [异步逻辑] 通知 SemanticMapper 生成 DRAFT 补丁
+
+        return clean_df, quarantine_df, audit_report, lifecycle
 
     def _route_data(self, compiled_df: pd.DataFrame, audit_report: TrustAuditReport) -> Tuple[pd.DataFrame, pd.DataFrame]:
         quarantine_indices = audit_report.quarantine_indices
