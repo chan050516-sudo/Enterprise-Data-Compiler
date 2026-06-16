@@ -1,5 +1,10 @@
 from pydantic import BaseModel, Field, validator, ConfigDict
 from typing import Dict, List, Union, Literal, Any, Optional
+from datetime import datetime, timezone
+import uuid
+
+def _generate_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 class IRArgument(BaseModel):
     """Classify the data whether is a column reference or just a normal literal"""
@@ -35,3 +40,31 @@ class AdvancedTransformationIR(BaseModel):
     pipeline_version: str = "2.0"
     intermediate_steps: Dict[str, IRNode] = Field(default_factory=dict, description="中间计算图节点")
     output_mappings: Dict[str, IRNode] = Field(..., description="最终输出到 Ontology 的映射节点")
+
+class MappingSpec(BaseModel):
+    """
+    控制平面核心实体 (Control Plane Entity)
+    将无状态的 IR 封装为带有生命周期、版本和状态的审计契约。
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    # 基础审计元数据
+    spec_id: str = Field(default_factory=lambda: f"SPEC-{uuid.uuid4().hex[:8].upper()}")
+    domain: str = Field(..., description="业务域，例如 'POS_TO_SAP', 'SHOPIFY_TO_AUTOCOUNT'")
+    version: str = Field(..., description="遵循语义化版本，如 v1.0.0, v1.1.0-PATCH")
+    status: Literal["DRAFT", "PENDING_APPROVAL", "LOCKED", "ARCHIVED"] = "DRAFT"
+    
+    # 核心载荷
+    ir_graph: AdvancedTransformationIR
+    
+    # 溯源与血缘 (Lineage)
+    created_by: str = Field(default="AI_COPROCESSOR", description="AI 或是具体员工工号")
+    created_at: str = Field(default_factory=_generate_utc_now)
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    parent_spec_id: Optional[str] = Field(default=None, description="若是 AI 根据失败记录生成的 Patch，需指向原挂掉的 Spec ID")
+    rejection_reason: Optional[str] = None
+
+    def is_executable(self) -> bool:
+        """执行平面准入的唯一绝对断言"""
+        return self.status == "LOCKED"

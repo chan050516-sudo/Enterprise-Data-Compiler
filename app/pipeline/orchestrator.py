@@ -9,6 +9,7 @@ from app.harness.ir_validator import IRValidator
 from app.runtime.compiler import IRCompiler
 from app.harness.trust_evaluator import DataTrustEngine
 from app.harness.report import TrustAuditReport
+from app.schema.ir_model import MappingSpec
 
 logger = logging.getLogger(__name__)
 
@@ -24,79 +25,49 @@ class PipelineOrchestrator:
     def run_pipeline(
         self, 
         source_df: pd.DataFrame, 
+        active_spec: MappingSpec,
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
-        max_retries: int = 2
     ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport]:
-        """
-        执行自治编译流水线，返回 (Clean_DF, Quarantine_DF, TrustAuditReport)。
-        """
-        logger.info("--- 🚀 Starting Autonomous Data Compilation Pipeline ---")
         
-        # Layer 2: Semantic Profiling 
-        logger.info("[Layer 2] Extracting Semantic Profile & Data Fingerprints...")
-        source_schema = SemanticProfiler.profile(source_df)
-        total_source_rows = len(source_df)
+        logger.info("--- 🚀 Starting Stateful Execution Plane ---")
         
-        failure_feedback = None # 自愈反馈上下文
-        
-        for attempt in range(max_retries + 1):
-            is_healing_run = attempt > 0
-            if is_healing_run:
-                logger.warning(f"--- 🛠️ Initiating Self-Healing Loop (Attempt {attempt}/{max_retries}) ---")
-            
-            # Layer 4: LLM IR Generation 
-            logger.info("[Layer 4] Semantic Mapper generating/patching Transformation IR...")
-            ir_spec = self.mapper.generate_ir(
-                source_schema=source_schema, 
-                target_ontology=target_ontology,
-                mapping_hints=[failure_feedback] if failure_feedback else None # 巧妙复用 hint 接口注入报错现场
-            )
-            
-            # Layer 5-P1: 拓扑安全校验
-            logger.info("[Layer 5-P1] Validating IR static topology safety...")
-            IRValidator.validate_topology(ir_spec, list(source_df.columns), target_ontology)
-            
-            # Layer 6: 确定性编译与规范化
-            logger.info("[Layer 6] Executing deterministic vectorized compilation...")
-            compiled_df = self.compiler.compile(source_df, ir_spec, target_ontology)
-            
-            # Layer 5-P2: 信任引擎评估
-            logger.info("[Layer 5-P2] Evaluating Trust Score and ODCS Contracts...")
-            audit_report: TrustAuditReport = self.enforcer.evaluate(
-                compiled_df=compiled_df, 
-                target_ontology=target_ontology,
-                reference_data=reference_data
-            )
-            
-            # 全局熔断检查
-            if audit_report.dataset_errors:
-                logger.warning(f"Dataset-level errors detected: {audit_report.dataset_errors}")
-                # raise RuntimeError(f"Pipeline Halted: Critical Dataset Failures detected: {audit_report.dataset_errors}")
-                
-            # --- 自治路由决策树 ---
-            decision = audit_report.routing_decision
-            
-            if decision == "PASS":
-                logger.info(f"✅ Compilation passed. Trust Score: {audit_report.trust_score:.2f}")
-                clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
-                return clean_df, quarantine_df, audit_report
-                
-            elif decision == "AUTO_HEAL" and attempt < max_retries:
-                clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
-                # 【核心进化】：传入 total_source_rows，提取高密度统计学画像
-                failure_feedback = self._extract_failure_context(quarantine_df, audit_report, total_source_rows)
-                logger.warning(f"⚠️ Trust Score is {audit_report.trust_score:.2f}. Feeding statistical anomaly profile back to LLM...")
-                continue
-                
-            else:
-                reason = "Max retries reached" if attempt >= max_retries else "Low Trust Score"
-                logger.error(f"❌ Self-healing aborted ({reason}). Routing to Quarantine Review.")
-                break
+        # [防线 0]: 控制平面准入断言
+        if not active_spec.is_executable():
+            raise PermissionError(f"Execution Halted: MappingSpec {active_spec.spec_id} is in {active_spec.status} state. Must be LOCKED.")
 
+        # State: INIT -> COMPILED
+        logger.info(f"[Layer 5-P1] Validating IR static topology safety for Spec {active_spec.spec_id}...")
+        IRValidator.validate_topology(active_spec.ir_graph, list(source_df.columns), target_ontology)
+        
+        logger.info("[Layer 6] Executing deterministic vectorized compilation...")
+        compiled_df = self.compiler.compile(source_df, active_spec.ir_graph, target_ontology)
+        
+        # State: COMPILED -> RECONCILED
+        logger.info("[Layer 5-P2] Evaluating Trust Score and Forensic ODCS Contracts...")
+        audit_report: TrustAuditReport = self.enforcer.evaluate(
+            compiled_df=compiled_df, 
+            target_ontology=target_ontology,
+            reference_data=reference_data,
+            base_mapping_confidence=1.0 # 锁定态契约自带最高初始信任
+        )
+        
+        if audit_report.dataset_errors:
+            logger.error(f"Global Invariant / Dataset errors detected: {audit_report.dataset_errors}")
+            # 不再进行 AI 闭环，直接中断批次
+            
+        decision = audit_report.routing_decision
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
-        logger.info(f"--- Compilation Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
-        return clean_df, quarantine_df, audit_report, ir_spec
+        
+        # State: RECONCILED -> COMMITTED | QUARANTINED
+        if decision == "PASS":
+            logger.info(f"✅ Batch Reconciled. Trust Score: {audit_report.trust_score:.2f}. Ready for Commit.")
+        else:
+            logger.warning(f"⚠️ Batch Quarantined. Trust Score: {audit_report.trust_score:.2f}. System safely halted.")
+            # 此时可触发外部事件，唤醒 SemanticMapper 生成补丁（异步操作，不阻塞当前流水线）
+
+        logger.info(f"--- Execution Finished | Clean: {len(clean_df)} | Quarantined: {len(quarantine_df)} ---")
+        return clean_df, quarantine_df, audit_report
 
     def _route_data(self, compiled_df: pd.DataFrame, audit_report: TrustAuditReport) -> Tuple[pd.DataFrame, pd.DataFrame]:
         quarantine_indices = audit_report.quarantine_indices

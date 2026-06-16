@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.llm.llm_client import GeminiClient
 from app.llm.prompt_templates import COMPILER_SYSTEM_INSTRUCTION, build_mapping_prompt
-from app.schema.ir_model import AdvancedTransformationIR
+from app.schema.ir_model import AdvancedTransformationIR, MappingSpec
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +34,16 @@ class SemanticMapper:
                     "confidence": "High (Literal similarity > 0.8)"
                 })
         return hints
-
-    def generate_ir(
+    
+    def generate_spec( # generate IR -> generate spec
         self, 
         source_schema: Dict[str, Any], 
         target_ontology: Dict[str, Any],
-        mapping_hints: Optional[List[Dict[str, Any]]] = None
-    ) -> AdvancedTransformationIR:
-        """
-        Execute semantic mapping, generate static topological computational graph output
-        """
-
+        mapping_hints: Optional[List[Dict[str, Any]]] = None,
+        patch_version: str = "v1.0",           # [新增]: 版本注入
+        parent_spec_id: Optional[str] = None   # [新增]: 血缘追踪
+    ) -> MappingSpec: # [修改]: 返回值变更为 MappingSpec
+        
         heuristic_hints = self._generate_heuristic_hints(source_schema, target_ontology)
         combined_hints = (mapping_hints or []) + heuristic_hints
 
@@ -68,7 +67,15 @@ class SemanticMapper:
         try:
             ir_spec = AdvancedTransformationIR.model_validate_json(raw_json_str)
             logger.info(f"Successfully generated IR with {len(ir_spec.output_mappings)} target fields.")
-            return ir_spec
+            
+            # [核心修改]: 封箱为只读草案，交出控制权
+            return MappingSpec(
+                version=f"{patch_version}-DRAFT",
+                status="DRAFT",
+                ir_graph=ir_spec,
+                parent_spec_id=parent_spec_id
+            )
+            
         except ValidationError as ve:
             logger.error(f"Fatal Deserialization Error. Raw LLM output: \n{raw_json_str}")
             raise RuntimeError(f"Layer 4 Contract Violation. LLM output failed Pydantic validation: {str(ve)}")
