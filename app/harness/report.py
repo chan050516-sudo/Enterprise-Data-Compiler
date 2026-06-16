@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Literal
 from pydantic import BaseModel, Field
 
@@ -24,14 +24,16 @@ class WarningDetail(BaseModel):
 
 class TrustAuditReport(BaseModel):
     """
-    数据编译器的标准信任度审计报告
+    Layer 5/7: 数据编译器的标准信任度审计报告
     """
-    # 元数据
-    report_id: str = Field(default_factory=lambda: datetime.now().strftime("AUDIT-%Y%m%d%H%M%S"))
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    # [新增] 元数据与溯源血缘 (Lineage)
+    report_id: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("AUDIT-%Y%m%d%H%M%S"))
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    batch_id: Optional[str] = Field(default=None, description="绑定的执行平面批次 ID")
+    spec_id: Optional[str] = Field(default=None, description="执行所依赖的控制平面 MappingSpec ID")
     
-    # 核心决策
-    routing_decision: Literal["PASS", "AUTO_HEAL", "QUARANTINE"]
+    # [修改] 核心决策：彻底剥离 AUTO_HEAL，仅保留绝对的放行或隔离
+    routing_decision: Literal["PASS", "QUARANTINE"]
     trust_score: float
     
     # 统计数据
@@ -57,11 +59,19 @@ class TrustAuditReport(BaseModel):
             f"# 🛡️ Data Compiler Audit Report: {self.report_id}",
             f"**Timestamp:** {self.timestamp} | **Routing Decision:** `{self.routing_decision}`",
             f"**Trust Score:** {self.trust_score * 100:.2f}% | **Total Rows:** {self.total_rows}",
-            "---",
         ]
         
+        # [新增] 血缘信息渲染
+        if self.batch_id or self.spec_id:
+            lineage = []
+            if self.batch_id: lineage.append(f"**Batch:** `{self.batch_id}`")
+            if self.spec_id: lineage.append(f"**Spec:** `{self.spec_id}`")
+            md.append(" | ".join(lineage))
+            
+        md.append("---")
+        
         if self.dataset_errors:
-            md.append("## 🚨 CRITICAL: Dataset-Level Failures")
+            md.append("## 🚨 CRITICAL: Dataset-Level/Reconciliation Failures")
             for de in self.dataset_errors:
                 md.append(f"- **{de.get('rule', 'System')}**: {de.get('error')}")
 
@@ -69,7 +79,8 @@ class TrustAuditReport(BaseModel):
         if not self.errors:
             md.append("*No row-level errors detected.*")
         for err in self.errors:
-            md.append(f"- **Col:** `{err.column}` | **Rule:** `{err.rule}` | **Rows Affected:** {err.affected_rows}")
+            err_msg = f" | **Detail:** {err.error_message}" if err.error_message else ""
+            md.append(f"- **Col:** `{err.column}` | **Rule:** `{err.rule}` | **Rows Affected:** {err.affected_rows}{err_msg}")
 
         md.append("## ⚠️ Warnings (Passed within Tolerance)")
         if not self.warnings:
