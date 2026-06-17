@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Literal, Any
+from typing import Dict, List, Optional, Literal, Any, Union
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ class TargetOntology(BaseModel):
     relationships: List[Relationship] = Field(default_factory=list)
     cross_entity_rules: List[CrossEntityRule] = Field(default_factory=list)
     lifecycle_states: Optional[List[str]] = None
+    primary_key: Optional[Union[str, List[str]]] = None
 
 # ==========================================
 # 2. 注册表管理器 (Registry Manager)

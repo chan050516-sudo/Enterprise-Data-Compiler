@@ -29,6 +29,14 @@ class TargetSchemaIntrospector:
             cursor.execute(f"PRAGMA table_info({table_name});")
             columns = cursor.fetchall()
             # columns: (cid, name, type, notnull, dflt_value, pk)
+
+            pk_columns = []
+            for col in columns:
+                if col[5] > 0:          # pk 标志
+                    pk_columns.append((col[1], col[5]))  # (列名, pk顺序)
+            pk_columns.sort(key=lambda x: x[1])          # 按顺序排列
+            pk_cols = [col[0] for col in pk_columns]
+            primary_key = pk_cols[0] if len(pk_cols) == 1 else pk_cols if pk_cols else None
             
             fields = {}
             odcs_row_rules = []
@@ -93,7 +101,8 @@ class TargetSchemaIntrospector:
                     "row_level_rules": odcs_row_rules,
                     "dataset_level_rules": [],
                     "global_invariants": []
-                }
+                },
+                "primary_key": primary_key
             }
         
         conn.close()

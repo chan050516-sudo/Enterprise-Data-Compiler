@@ -30,6 +30,7 @@ class SQLiteWriter:
         """
         table_name = target_ontology.get("dataset_name", "compiled_business_table")
         fields_config = target_ontology.get("fields", {})
+        primary_key = target_ontology.get("primary_key")
         
         if clean_df.empty:
             logger.warning(f"No rows to write for table '{table_name}'. Persistence skipped.")
@@ -40,13 +41,13 @@ class SQLiteWriter:
         
         try:
             # 1. 动态生成确定性 DDL
-            self._ensure_table_exists(cursor, table_name, fields_config)
+            self._ensure_table_exists(cursor, table_name, fields_config, primary_key)
 
             # 2. 向量化脱敏清洗 (防 pd.NA 导致 SQLite C 驱动崩溃)
             sanitized_df = self._sanitize_for_sqlite(clean_df)
 
             # 3. 极速对齐绑定与入库
-            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config)
+            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key)
             
             conn.commit()
             logger.info(f"🎉 Successfully persisted {rows_inserted} records to '{table_name}' in SQLite DB.")
@@ -67,6 +68,7 @@ class SQLiteWriter:
         """
         table_name = target_ontology.get("dataset_name", "compiled_business_table")
         fields_config = target_ontology.get("fields", {})
+        primary_key = target_ontology.get("primary_key")
 
         if reversal_df.empty:
             return 0
@@ -78,9 +80,9 @@ class SQLiteWriter:
         cursor = conn.cursor()
 
         try:
-            self._ensure_table_exists(cursor, table_name, fields_config)
+            self._ensure_table_exists(cursor, table_name, fields_config, primary_key)
             sanitized_df = self._sanitize_for_sqlite(reversal_df)
-            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config)
+            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key)
             
             conn.commit()
             logger.critical(f"✅ SAGA: Reversal records successfully hard-committed to target database.")
@@ -95,13 +97,22 @@ class SQLiteWriter:
 
     # --- 内部复用工具方法 ---
     
-    def _ensure_table_exists(self, cursor, table_name: str, fields_config: Dict[str, Any]):
+    def _ensure_table_exists(self, cursor, table_name: str, fields_config: Dict[str, Any], primary_key=None):
         columns_ddl = []
+        pk_columns = []
+        # 将 primary_key 统一转为列表处理
+        pk_list = primary_key if isinstance(primary_key, list) else [primary_key] if primary_key else []
+       
         for col_name, field_attr in fields_config.items():
             ontology_type = field_attr.get("type", "string")
             sql_type = self._TYPE_MAP.get(ontology_type, "TEXT")
             columns_ddl.append(f'"{col_name}" {sql_type}')
-        
+            if col_name in pk_list:
+                pk_columns.append(f'"{col_name}"')
+
+        if pk_columns:
+            columns_ddl.append(f'PRIMARY KEY ({", ".join(pk_columns)})')
+
         columns_ddl.append('"-compiled_at" TEXT DEFAULT CURRENT_TIMESTAMP')
         ddl_query = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(columns_ddl)});'
         cursor.execute(ddl_query)
@@ -115,10 +126,15 @@ class SQLiteWriter:
                 sanitized_df[col] = sanitized_df[col].replace({np.nan: None})
         return sanitized_df
 
-    def _execute_bulk_insert(self, cursor, table_name: str, sanitized_df: pd.DataFrame, fields_config: Dict[str, Any]) -> int:
+    def _execute_bulk_insert(self, cursor, table_name: str, sanitized_df: pd.DataFrame, fields_config: Dict[str, Any], primary_key=None) -> int:
         columns_to_insert = [col for col in fields_config.keys() if col in sanitized_df.columns]
         placeholders = ", ".join(["?"] * len(columns_to_insert))
-        insert_query = f'INSERT INTO "{table_name}" ({", ".join([f'"{c}"' for c in columns_to_insert])}) VALUES ({placeholders});'
+        col_names = ", ".join([f'"{c}"' for c in columns_to_insert])
+
+        if primary_key:
+            insert_stmt = f'INSERT OR REPLACE INTO "{table_name}" ({col_names}) VALUES ({placeholders});'
+        else:
+            insert_stmt = f'INSERT INTO "{table_name}" ({col_names}) VALUES ({placeholders});'
         
         total_inserted = 0
         
@@ -133,13 +149,13 @@ class SQLiteWriter:
                     continue
                 
                 data_matrix = chunk[columns_to_insert].values.tolist()
-                cursor.executemany(insert_query, data_matrix)
+                cursor.executemany(insert_stmt, data_matrix)
                 total_inserted += len(data_matrix)
                 logger.debug(f" - Inserted Depth {depth} chunk: {len(data_matrix)} records.")
         else:
             # 标准的扁平表写入
             data_matrix = sanitized_df[columns_to_insert].values.tolist()
-            cursor.executemany(insert_query, data_matrix)
+            cursor.executemany(insert_stmt, data_matrix)
             total_inserted += len(data_matrix)
 
         return total_inserted

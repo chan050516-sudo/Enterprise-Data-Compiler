@@ -35,6 +35,7 @@ python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_
 
 ---
 
+[DONE]
 ## 3. **缺少“增量更新”与“历史变更追踪”机制**（运维缺口）
 - **现状**：全量覆盖写入，无`upsert`或`merge`逻辑。
 - **真实场景**：每日增量迁移，需根据主键更新或插入。
