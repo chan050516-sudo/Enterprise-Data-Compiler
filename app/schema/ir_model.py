@@ -19,11 +19,11 @@ class IRNode(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     operation: Literal[
-        # 基础算子
+        # Basic Operator
         "COPY", "CONCAT", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "TO_FLOAT", "TO_INT",
-        # 清洗与规范化算子
+        # Cleaning and Normalization Operator
         "PARSE_DATE", "CLEAN_CURRENCY", "FUZZY_MAP", "RESOLVE_ENTITIES", "REGEX_EXTRACT", "REPLACE", "FILLNA",
-        # 关系代数与高阶表达算子
+        # Relational Algebra关系代数与高阶表达算子
         "COMPUTE_EXPR", "JOIN", "UNION", "GROUP_BY", "FILTER", "EXPLODE",
         # 图灵完备级 SQL 算子
         "WINDOW_APPLY", "CASE_WHEN", "PIVOT", "UNPIVOT", "ORDER_BY", "LIMIT",

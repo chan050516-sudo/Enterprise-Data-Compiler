@@ -53,7 +53,7 @@ def parse_args():
     parser.add_argument("--source", type=str, required=True, help="Path to the messy source CSV file")
     parser.add_argument("--target-ontology", type=str, required=True, help="Name of the target ontology to compile into")
     parser.add_argument("--registry-file", type=str, default="app/ontology/ontology_registry.json", help="Path to Layer 3 JSON registry")
-
+    parser.add_argument("--introspect", action="store_true", help="Auto-introspect target DB and generate ontology registry JSON")
     parser.add_argument("--domain", type=str, required=True, help="Business Domain (e.g., 'POS_TO_SAP') to fetch LOCKED MappingSpec")
 
     # 物理持久化路径
@@ -81,6 +81,18 @@ def main():
     logger.info("=" * 60)
 
     try:
+        # 如果启用 introspect 模式
+        if args.introspect:
+            from app.schema.target_schema_introspector import TargetSchemaIntrospector
+            db_path = args.db_out
+            if not os.path.exists(db_path):
+                logger.error(f"Target DB {db_path} does not exist. Please ensure the database exists.")
+                sys.exit(2)
+            output_file = args.registry_file  # 使用 --registry-file 指定的文件
+            TargetSchemaIntrospector.save_to_registry(args.db_out, output_file)
+            logger.info(f"✅ Target registry generated. You can now run without --introspect using: --registry-file {output_file}")
+            sys.exit(0)  # 不执行后续流水线
+
         # 2. 挂载 Layer 3 契约注册表
         logger.info("[Init] Booting Ontology Registry Manager...")
         registry = OntologyRegistryManager(args.registry_file)

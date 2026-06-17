@@ -11,6 +11,7 @@ class Config:
     SAMPLE_DATA_DIR = BASE_DIR / "tests" / "sample_data"
     ONTOLOGY_DIR = BASE_DIR / "app" / "ontology"
     CANONICAL_ONTOLOGY_PATH = BASE_DIR / "app" / "ontology" / "canonical_ontology.json"
+    TARGET_SCHEMA_OUTPUT = BASE_DIR / "app" / "ontology" / "auto_generated_target_registry.json"
     
     # LLM Settings
     LLM_TEMPERATURE = 0.0  # For Deterministic Output

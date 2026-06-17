@@ -8,6 +8,7 @@ class WaveTask(BaseModel):
     domain: str = Field(..., description="业务域，用于去 SpecRepository 提取 LOCKED Spec")
     target_ontology_name: str = Field(..., description="目标 Ontology 名称")
     source_dataset_key: str = Field(..., description="在数据源字典中的 Key")
+    extra_source_datasets: List[str] = Field(default_factory=list, description="额外源数据集键值列表")
     depends_on: List[str] = Field(default_factory=list, description="依赖的前置 task_id 列表")
     abort_threshold: float = Field(default=0.05, description="容忍的最大隔离率，超出则阻断下游 (默认 5%)")
     

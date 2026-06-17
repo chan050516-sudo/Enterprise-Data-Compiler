@@ -37,6 +37,7 @@ class PipelineOrchestrator:
         active_spec: MappingSpec,
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
+        extra_dataframes: Dict[str, pd.DataFrame] = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport, BatchLifecycle]:
         
         batch_id = f"BATCH-{uuid.uuid4().hex[:8].upper()}"
@@ -55,7 +56,7 @@ class PipelineOrchestrator:
             source_df=source_df, 
             ir=active_spec.ir_graph, 
             target_ontology=target_ontology,
-            extra_tables=reference_data,               # 透传给 VALUE_LOOKUP
+            extra_tables=extra_dataframes,               # 透传给 VALUE_LOOKUP
             global_constants=active_spec.global_constants # 透传数据增补矩阵
         )
         lifecycle.transition_to(BatchState.COMPILED, "Vectorized compilation finished.")

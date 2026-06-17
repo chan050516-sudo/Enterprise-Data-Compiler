@@ -85,11 +85,22 @@ class WaveOrchestrator:
                 continue
 
             # 2. 挂载执行平面所需的契约与数据
-            source_df = data_sources.get(task.source_dataset_key)
-            if source_df is None:
-                logger.error(f"Source dataset '{task.source_dataset_key}' not provided.")
-                halted_tasks.add(task.task_id)
+            all_keys = [task.source_dataset_key] + task.extra_source_datasets
+            source_dfs = {}
+            missing = False
+            for key in all_keys:
+                df = data_sources.get(key)
+                if df is None:
+                    logger.error(f"Source dataset '{key}' not provided.")
+                    halted_tasks.add(task.task_id)
+                    missing = True
+                    break
+                source_dfs[key] = df
+            if missing:
                 continue
+
+            primary_df = source_dfs[task.source_dataset_key]
+            extra_dfs = {k: v for k, v in source_dfs.items() if k != task.source_dataset_key}
 
             active_spec = self.spec_repo.get_active_locked_spec(task.domain)
             if not active_spec:
@@ -108,10 +119,11 @@ class WaveOrchestrator:
 
             # 4. 移交执行平面 (Execution Plane)
             clean_df, quarantine_df, audit_report, lifecycle = self.pipeline.run_pipeline(
-                source_df=source_df,
+                source_df=primary_df,
                 active_spec=active_spec,
                 target_ontology=target_ontology,
-                reference_data=reference_data
+                reference_data=reference_data,
+                extra_dataframes=extra_dfs
             )
 
             # 5. 分析执行结果与阻断策略 (Failure Threshold Assessment)
