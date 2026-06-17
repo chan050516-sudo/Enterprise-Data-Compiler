@@ -18,7 +18,7 @@ class ReconciliationEngine:
     3. 跨表/跨模块汇总一致性 (Cross-module Consistency)
     """
 
-    def perform_reconciliation(self, df: pd.DataFrame, audit_report: TrustAuditReport, target_ontology: Dict[str, Any]) -> None:
+    def perform_reconciliation(self, df: pd.DataFrame, audit_report: TrustAuditReport, target_ontology: Dict[str, Any], extra_dataframes: Dict[str, pd.DataFrame] = None) -> None:
         """
         执行深度业务对账。如果对账失败，直接将异动数据追加到 audit_report 的隔离区中，
         并降级批次的路由决策。
@@ -53,6 +53,12 @@ class ReconciliationEngine:
             except Exception as e:
                 logger.error(f"Reconciliation crashed on invariant '{inv_name}': {str(e)}")
                 self._flag_dataset_error(audit_report, inv_name, f"Reconciliation execution failure: {str(e)}")
+
+        cross_rules = target_ontology.get("cross_entity_rules", [])
+        for rule in cross_rules:
+            rule_type = rule.get("type")
+            if rule_type == "existence_check":
+                self._check_existence(df, audit_report, rule, extra_dataframes)
 
         # 3. 基于对账结果重算信任分与路由决策
         self._re_evaluate_report(audit_report)
@@ -229,4 +235,49 @@ class ReconciliationEngine:
                 "rule": inv_name,
                 "affected_rows": len(violators),
                 "error_message": f"Recursive Rollup Variance: {len(violators)} nodes failed parent-child sum balancing."
+            })
+
+    def _check_existence(
+        self,
+        df: pd.DataFrame,
+        report: TrustAuditReport,
+        rule: Dict[str, Any],
+        extra_dataframes: Dict[str, pd.DataFrame] = None
+    ):
+        name = rule.get("name", "existence_check")
+        source_entity = rule.get("source_entity")
+        target_entity = rule.get("target_entity")
+        foreign_key = rule.get("foreign_key")
+        if not source_entity or not target_entity or not foreign_key:
+            logger.warning(f"Cross-entity rule '{name}' missing required fields.")
+            return
+        if extra_dataframes is None or target_entity not in extra_dataframes:
+            report.warnings.append({
+                "rule": name,
+                "affected_rows": 0,
+                "note": f"Target entity '{target_entity}' not available for existence check."
+            })
+            return
+
+        target_df = extra_dataframes[target_entity]
+        # 主键列：可从 relationships 推断，这里先硬编码为 'id'
+        target_pk_col = "id"  # 可改进为从 target_ontology 获取
+        if foreign_key not in df.columns:
+            return
+        src_fk = df[foreign_key].dropna()
+        if src_fk.empty:
+            return
+        if target_pk_col not in target_df.columns:
+            logger.warning(f"Target entity '{target_entity}' missing primary key column '{target_pk_col}'.")
+            return
+        valid_ids = set(target_df[target_pk_col].dropna())
+        invalid_mask = ~src_fk.isin(valid_ids)
+        violators = df[invalid_mask].index.tolist()
+        if violators:
+            report.quarantine_indices.extend(violators)
+            report.errors.append({
+                "column": foreign_key,
+                "rule": name,
+                "affected_rows": len(violators),
+                "error_message": f"Foreign key '{foreign_key}' references non-existent record in '{target_entity}'."
             })

@@ -189,5 +189,40 @@
         "severity": "error"
       }
     ]
-  }
+  },
+  "relationships": [
+    {
+      "from_entity": "CommercialDocument",
+      "to_entity": "CommercialDocumentLine",
+      "cardinality": "1:N",
+      "via": "document_id",
+      "description": "A document can have multiple lines."
+    },
+    {
+      "from_entity": "BusinessPartner",
+      "to_entity": "CommercialDocument",
+      "cardinality": "1:N",
+      "via": "partner_id",
+      "description": "A partner can have multiple documents."
+    },
+    {
+      "from_entity": "JournalEntry",
+      "to_entity": "JournalEntryLine",
+      "cardinality": "1:N",
+      "via": "journal_id",
+      "description": "A journal entry can have multiple lines."
+    }
+  ],
+  "cross_entity_rules": [
+    {
+      "name": "invoice_must_have_lines",
+      "type": "existence_check",
+      "source_entity": "CommercialDocument",
+      "target_entity": "CommercialDocumentLine",
+      "foreign_key": "document_id",
+      "severity": "error",
+      "description": "Each document must have at least one line item."
+    }
+  ],
+  "lifecycle_states": ["DRAFT", "POSTED", "CLOSED"]
 }

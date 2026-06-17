@@ -213,6 +213,15 @@ class IRValidator:
         errors.extend(IRValidator._validate_compute_expr_variables(ir_spec, source_columns))
         errors.extend(IRValidator._validate_group_by_references(ir_spec))
 
+        relationships = target_ontology.get("relationships", [])
+        for rel in relationships:
+            via = rel.get("via")
+            if via and via not in ir_spec.output_mappings:
+                errors.append(
+                    f"Relationship '{rel.get('from_entity')}->{rel.get('to_entity')}' "
+                    f"requires foreign key column '{via}' in output_mappings."
+                )
+
         if errors:
             logger.error("IR Topology Validation Failed.")
             raise IRTopologyError(errors)

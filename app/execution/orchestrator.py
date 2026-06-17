@@ -75,7 +75,7 @@ class PipelineOrchestrator:
             # base_mapping_confidence=1.0 # 锁定态契约自带最高初始信任
         )
         
-        self.reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology)
+        self.reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology, extra_dataframes=extra_dataframes)
 
         decision = audit_report.routing_decision
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
