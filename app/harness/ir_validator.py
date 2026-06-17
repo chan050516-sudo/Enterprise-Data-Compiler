@@ -51,6 +51,84 @@ class IRValidator:
                 dfs(step)
                 
         return errors
+    
+    @staticmethod
+    def _validate_output_completeness(ir_spec: AdvancedTransformationIR, target_ontology: Dict[str, Any]) -> List[str]:
+        errors = []
+        fields = target_ontology.get("fields", {})
+        row_rules = target_ontology.get("odcs_contracts", {}).get("row_level_rules", [])
+        # 收集有 not_null 或 unique 约束的列
+        required_cols = set()
+        for rule in row_rules:
+            col = rule.get("column")
+            if col and rule.get("assertion") in ["not_null", "unique"] and col in fields:
+                required_cols.add(col)
+        # 检查这些列是否在 output_mappings 中
+        output_cols = set(ir_spec.output_mappings.keys())
+        missing = required_cols - output_cols
+        for col in missing:
+            errors.append(f"Required field '{col}' (has not_null/unique constraint) is not present in output_mappings.")
+        return errors
+
+    @staticmethod
+    def _validate_join_operators(ir_spec: AdvancedTransformationIR) -> List[str]:
+        errors = []
+        for step_name, node in ir_spec.intermediate_steps.items():
+            if node.operation == "JOIN":
+                # 必须有至少两个 TABLE_REF 输入
+                table_refs = [arg for arg in node.inputs if arg.type == "TABLE_REF"]
+                if len(table_refs) < 2:
+                    errors.append(f"JOIN step '{step_name}' requires at least two TABLE_REF inputs.")
+                # 必须指定连接条件
+                opts = node.options or {}
+                if not (opts.get("on") or (opts.get("left_on") and opts.get("right_on"))):
+                    errors.append(f"JOIN step '{step_name}' must specify 'on' or (left_on, right_on) in options.")
+        return errors
+
+    @staticmethod
+    def _validate_lookup_operators(ir_spec: AdvancedTransformationIR) -> List[str]:
+        errors = []
+        for step_name, node in ir_spec.intermediate_steps.items():
+            if node.operation == "VALUE_LOOKUP":
+                opts = node.options or {}
+                if not (opts.get("mapping_dict") or opts.get("xref_name")):
+                    errors.append(f"VALUE_LOOKUP step '{step_name}' requires 'mapping_dict' or 'xref_name' in options.")
+        return errors
+
+    @staticmethod
+    def _validate_compute_expr_variables(ir_spec: AdvancedTransformationIR, source_columns: List[str]) -> List[str]:
+        import re
+        errors = []
+        # 收集所有已定义的变量：源列 + 中间步骤名
+        defined_vars = set(source_columns) | set(ir_spec.intermediate_steps.keys())
+        for step_name, node in ir_spec.intermediate_steps.items():
+            if node.operation == "COMPUTE_EXPR":
+                formula = node.options.get("formula", "")
+                # 提取所有标识符（简单字母数字下划线）
+                variables = set(re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', formula))
+                # 忽略数字和关键字，这里只检查变量是否存在
+                for var in variables:
+                    if var not in defined_vars:
+                        errors.append(f"COMPUTE_EXPR step '{step_name}' references undefined variable '{var}' in formula.")
+        return errors
+
+    @staticmethod
+    def _validate_group_by_references(ir_spec: AdvancedTransformationIR) -> List[str]:
+        errors = []
+        group_by_steps = [name for name, node in ir_spec.intermediate_steps.items() if node.operation == "GROUP_BY"]
+        if not group_by_steps:
+            return errors
+        # 检查中间步骤是否引用 GROUP_BY（已有的检查，但我们需要确保所有步骤都检查）
+        for step_name, node in ir_spec.intermediate_steps.items():
+            for arg in node.inputs:
+                if arg.type == "STEP_REF" and arg.value in group_by_steps:
+                    errors.append(f"Intermediate step '{step_name}' references GROUP_BY step '{arg.value}'. GROUP_BY changes row count and cannot be used in intermediate steps.")
+        # 检查输出映射是否引用 GROUP_BY
+        for target_col, node in ir_spec.output_mappings.items():
+            for arg in node.inputs:
+                if arg.type == "STEP_REF" and arg.value in group_by_steps:
+                    errors.append(f"Output mapping '{target_col}' references GROUP_BY step '{arg.value}'. GROUP_BY must only be used as the final aggregation, not as input to other steps.")
+        return errors
 
     @staticmethod
     def validate_topology(ir_spec: AdvancedTransformationIR, source_columns: List[str], target_ontology: Dict[str, Any]) -> bool:
@@ -128,6 +206,12 @@ class IRValidator:
                 for arg in node.inputs:
                     if arg.type == "STEP_REF" and arg.value in group_by_steps:
                         errors.append(f"[Output: {target_col}] Cannot reference GROUP_BY step '{arg.value}' in output mapping because GROUP_BY changes row count.")
+
+        errors.extend(IRValidator._validate_output_completeness(ir_spec, target_ontology))
+        errors.extend(IRValidator._validate_join_operators(ir_spec))
+        errors.extend(IRValidator._validate_lookup_operators(ir_spec))
+        errors.extend(IRValidator._validate_compute_expr_variables(ir_spec, source_columns))
+        errors.extend(IRValidator._validate_group_by_references(ir_spec))
 
         if errors:
             logger.error("IR Topology Validation Failed.")

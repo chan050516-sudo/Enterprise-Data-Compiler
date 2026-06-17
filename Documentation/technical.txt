@@ -23,6 +23,7 @@ python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_
 
 ---
 
+[DONE]
 ## 2. **LLM生成的IR缺少对“复杂关联”的验证**（逻辑缺口）
 - **现状**：`IRValidator`检查DAG和算子选项，但**没有验证输出字段是否满足目标表的业务唯一键、外键约束**。
 - **真实场景**：目标表有联合主键（如`document_id + line_id`），LLM可能生成缺少部分字段的映射。
@@ -47,6 +48,7 @@ python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_
 
 ---
 
+[DONE]
 ## 5. **缺少“映射失败时自动生成DRAFT补丁”的闭环**（自治缺口）
 - **现状**：`orchestrator.py`中有注释“通知SemanticMapper生成DRAFT补丁”，但并未实现。
 - **真实场景**：批次被隔离后，系统应自动分析错误并提议修正的Spec，形成闭环。

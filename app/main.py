@@ -22,6 +22,15 @@ from app.output.exporter import SecondaryExporter
 from app.execution.orchestrator import PipelineOrchestrator
 from app.execution.state_machine import BatchLifecycle, BatchState
 
+from app.llm.mapper import SemanticMapper
+from app.llm.llm_client import GeminiClient
+from app.control.governor import SpecGovernor
+
+llm_client = GeminiClient()
+semantic_mapper = SemanticMapper(llm_client)
+spec_governor = SpecGovernor(SpecRepository())
+
+
 # ==========================================
 # 1. 生产级日志配置 (Audit Logging)
 # ==========================================
@@ -118,7 +127,11 @@ def main():
         source_df = connector.read_data()
         
         # 5. 初始化执行平面中枢 (注入目标数据库路径，交由编排器内部处理写库与 Saga 冲销)
-        orchestrator = PipelineOrchestrator(db_path=args.db_out)
+        orchestrator = PipelineOrchestrator(
+            db_path=args.db_out,
+            semantic_mapper=semantic_mapper,
+            spec_governor=spec_governor
+        )
 
         # 6. 🚀 点火：执行核心自治流水线
         clean_df, quarantine_df, audit_report, lifecycle = orchestrator.run_pipeline(
