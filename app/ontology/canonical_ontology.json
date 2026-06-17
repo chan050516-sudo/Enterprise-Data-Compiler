@@ -1,11 +1,11 @@
 {
   "dataset_name": "canonical_erp_ontology",
-  "description": "跨ERP标准语义层 v1 - 用于语义编译器的基准目标结构",
+  "description": "Cross-ERP standard semantic layer v1 - benchmark target structure for the semantic compiler",
   "fields": {
     "partner_id": {
       "type": "string",
       "entity": "BusinessPartner",
-      "description": "业务伙伴唯一标识"
+      "description": "Unique identifier for business partner"
     },
     "partner_type": {
       "type": "string",
@@ -15,27 +15,27 @@
     "name": {
       "type": "string",
       "entity": "BusinessPartner",
-      "description": "伙伴名称"
+      "description": "Partner name"
     },
     "product_id": {
       "type": "string",
       "entity": "Product",
-      "description": "产品唯一标识"
+      "description": "Unique identifier for product"
     },
     "product_name": {
       "type": "string",
       "entity": "Product",
-      "description": "产品名称"
+      "description": "Product name"
     },
     "base_uom": {
       "type": "string",
       "entity": "Product",
-      "description": "基本计量单位"
+      "description": "Base unit of measure"
     },
     "document_id": {
       "type": "string",
       "entity": "CommercialDocument",
-      "description": "单据号"
+      "description": "Document number"
     },
     "doc_type": {
       "type": "string",
@@ -45,43 +45,43 @@
     "document_date": {
       "type": "date",
       "entity": "CommercialDocument",
-      "description": "单据日期"
+      "description": "Document date"
     },
     "currency": {
       "type": "string",
       "entity": "CommercialDocument",
-      "description": "货币代码"
+      "description": "Currency code"
     },
     "total_amount": {
       "type": "float",
       "entity": "CommercialDocument",
-      "description": "单据总额",
+      "description": "Total document amount",
       "fallback_strategy": "USE_ZERO"
     },
     "line_id": {
       "type": "string",
       "entity": "CommercialDocumentLine",
-      "description": "行项目ID"
+      "description": "Line item ID"
     },
     "quantity": {
       "type": "float",
       "entity": "CommercialDocumentLine",
-      "description": "数量"
+      "description": "Quantity"
     },
     "unit_price": {
       "type": "float",
       "entity": "CommercialDocumentLine",
-      "description": "单价"
+      "description": "Unit price"
     },
     "line_amount": {
       "type": "float",
       "entity": "CommercialDocumentLine",
-      "description": "行金额"
+      "description": "Line amount"
     },
     "movement_id": {
       "type": "string",
       "entity": "InventoryMovement",
-      "description": "库存移动ID"
+      "description": "Inventory movement ID"
     },
     "movement_type": {
       "type": "string",
@@ -91,47 +91,88 @@
     "warehouse_id": {
       "type": "string",
       "entity": "InventoryMovement",
-      "description": "仓库ID"
+      "description": "Warehouse ID"
     },
     "journal_id": {
       "type": "string",
       "entity": "JournalEntry",
-      "description": "凭证号"
+      "description": "Journal entry number"
     },
     "posting_date": {
       "type": "date",
       "entity": "JournalEntry",
-      "description": "过账日期"
+      "description": "Posting date"
     },
     "total_debit": {
       "type": "float",
       "entity": "JournalEntry",
-      "description": "借方总额"
+      "description": "Total debit amount"
     },
     "total_credit": {
       "type": "float",
       "entity": "JournalEntry",
-      "description": "贷方总额"
+      "description": "Total credit amount"
     },
     "account_code": {
       "type": "string",
       "entity": "JournalEntryLine",
-      "description": "会计科目"
+      "description": "Account code"
     },
     "debit": {
       "type": "float",
       "entity": "JournalEntryLine",
-      "description": "借方金额"
+      "description": "Debit amount"
     },
     "credit": {
       "type": "float",
       "entity": "JournalEntryLine",
-      "description": "贷方金额"
+      "description": "Credit amount"
     }
   },
   "odcs_contracts": {
-    "row_level_rules": [],
-    "dataset_level_rules": [],
+    "row_level_rules": [
+      
+      { "column": "partner_id", "assertion": "not_null", "severity": "error" },
+      { "column": "partner_id", "assertion": "unique", "severity": "error" },
+      { "column": "partner_type", "assertion": "enum_match", "severity": "error", "allowed_values": ["CUSTOMER", "VENDOR", "BOTH"] },
+      { "column": "name", "assertion": "not_null", "severity": "error" },
+      
+      { "column": "product_id", "assertion": "not_null", "severity": "error" },
+      { "column": "product_id", "assertion": "unique", "severity": "error" },
+      { "column": "product_name", "assertion": "not_null", "severity": "error" },
+      { "column": "base_uom", "assertion": "not_null", "severity": "error" },
+      
+      { "column": "document_id", "assertion": "not_null", "severity": "error" },
+      { "column": "document_id", "assertion": "unique", "severity": "error" },
+      { "column": "doc_type", "assertion": "enum_match", "severity": "error", "allowed_values": ["SALES_ORDER", "PURCHASE_ORDER", "AR_INVOICE", "AP_INVOICE", "POS_TRANSACTION"] },
+      { "column": "document_date", "assertion": "not_null", "severity": "error" },
+      { "column": "currency", "assertion": "not_null", "severity": "error" },
+      { "column": "total_amount", "assertion": "non_negative", "severity": "error" },
+      
+      { "column": "line_id", "assertion": "not_null", "severity": "error" },
+      { "column": "line_id", "assertion": "unique", "severity": "error" },
+      { "column": "quantity", "assertion": "non_negative", "severity": "error" },
+      { "column": "unit_price", "assertion": "non_negative", "severity": "error" },
+      { "column": "line_amount", "assertion": "non_negative", "severity": "error" },
+      
+      { "column": "movement_id", "assertion": "not_null", "severity": "error" },
+      { "column": "movement_id", "assertion": "unique", "severity": "error" },
+      { "column": "movement_type", "assertion": "enum_match", "severity": "error", "allowed_values": ["IN", "OUT", "TRANSFER", "ADJUSTMENT"] },
+      { "column": "warehouse_id", "assertion": "not_null", "severity": "error" },
+      
+      { "column": "journal_id", "assertion": "not_null", "severity": "error" },
+      { "column": "journal_id", "assertion": "unique", "severity": "error" },
+      { "column": "posting_date", "assertion": "not_null", "severity": "error" },
+      { "column": "total_debit", "assertion": "non_negative", "severity": "error" },
+      { "column": "total_credit", "assertion": "non_negative", "severity": "error" },
+      
+      { "column": "account_code", "assertion": "not_null", "severity": "error" },
+      { "column": "debit", "assertion": "non_negative", "severity": "error" },
+      { "column": "credit", "assertion": "non_negative", "severity": "error" }
+    ],
+    "dataset_level_rules": [
+      { "metric": "volume_check", "min_rows": 1 }
+    ],
     "global_invariants": [
       {
         "name": "double_entry_invariant",

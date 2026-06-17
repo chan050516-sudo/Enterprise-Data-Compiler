@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Literal, Any
 from pydantic import BaseModel, Field, ValidationError
 
@@ -66,10 +67,52 @@ class OntologyRegistryManager:
     """
     Layer 3: 静态目标业务模型与契约注册中心
     """
-    def __init__(self, registry_file_path: str):
+    def __init__(self, registry_file_path: str, canonical_path: Optional[str] = None):
         self.registry_file_path = registry_file_path
+        self.canonical_path = canonical_path
         self._ontologies: Dict[str, TargetOntology] = {}
+        self._canonical_ontology: Optional[Dict[str, Any]] = None
         self._load_and_validate()
+        if self.canonical_path:
+            self._load_canonical()
+
+    def _load_canonical(self):
+        """加载规范本体"""
+        try:
+            with open(self.canonical_path, 'r', encoding='utf-8') as f:
+                self._canonical_ontology = json.load(f)
+        except FileNotFoundError:
+            logger.warning(f"Canonical ontology file not found: {self.canonical_path}")
+            self._canonical_ontology = None
+
+    def _merge_rules(self, target_onto_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """将 canonical 的规则合并到 target 中，target 规则优先"""
+        if not self._canonical_ontology:
+            return target_onto_dict
+
+        # 复制一份避免修改原对象
+        merged = target_onto_dict.copy()
+        canonical_contracts = self._canonical_ontology.get("odcs_contracts", {})
+        target_contracts = merged.get("odcs_contracts", {})
+
+        # 合并规则
+        merged_contracts = {
+            "row_level_rules": [],
+            "dataset_level_rules": [],
+            "global_invariants": []
+        }
+
+        # 先加入 canonical 的规则（作为默认）
+        for key in ["row_level_rules", "dataset_level_rules", "global_invariants"]:
+            merged_contracts[key] = list(canonical_contracts.get(key, []))
+
+        # 再用 target 的规则覆盖（追加或替换同名规则？这里简单追加，可根据需要定制）
+        # 更精细的合并可以按 rule 名称去重，但这里为了简洁，直接追加
+        for key in ["row_level_rules", "dataset_level_rules", "global_invariants"]:
+            merged_contracts[key].extend(target_contracts.get(key, []))
+
+        merged["odcs_contracts"] = merged_contracts
+        return merged
 
     def _load_and_validate(self):
         """系统启动时挂载并校验 JSON 契约库"""

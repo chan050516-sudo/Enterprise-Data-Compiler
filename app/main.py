@@ -104,7 +104,7 @@ def main():
 
         # 2. 挂载 Layer 3 契约注册表
         logger.info("[Init] Booting Ontology Registry Manager...")
-        registry = OntologyRegistryManager(args.registry_file)
+        registry = OntologyRegistryManager(args.registry_file, canonical_path=settings.CANONICAL_ONTOLOGY_PATH)
         target_ontology = registry.get_ontology(args.target_ontology)
         with open(settings.CANONICAL_ONTOLOGY_PATH, 'r', encoding='utf-8') as f:
             canonical_ontology = json.load(f)
