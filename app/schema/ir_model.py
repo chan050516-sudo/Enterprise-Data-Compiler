@@ -45,6 +45,14 @@ class AdvancedTransformationIR(BaseModel):
     intermediate_steps: Dict[str, IRNode] = Field(default_factory=dict, description="中间计算图节点")
     output_mappings: Dict[str, IRNode] = Field(..., description="最终输出到 Ontology 的映射节点")
 
+class MappingMetadata(BaseModel):
+    """MappingSpec 的审计元数据（仅用于人类阅读，不被任何运行时组件消费）"""
+    reasoning_summary: str = Field(..., description="整体推导摘要")
+    evidence_chain: List[Dict[str, Any]] = Field(default_factory=list, description="每列匹配的证据列表")
+    ambiguities: List[Dict[str, Any]] = Field(default_factory=list, description="待人类裁决的歧义点")
+    profiler_summary: Optional[Dict[str, Any]] = Field(default=None, description="Layer 2 的统计快照")
+    overall_confidence: float = Field(default=0.0, ge=0.0, le=1.0)   
+
 class MappingSpec(BaseModel):
     """
     控制平面核心实体 (Control Plane Entity)
@@ -70,6 +78,10 @@ class MappingSpec(BaseModel):
     approved_at: Optional[str] = None
     parent_spec_id: Optional[str] = Field(default=None, description="若是 AI 根据失败记录生成的 Patch, 需指向原挂掉的 Spec ID")
     rejection_reason: Optional[str] = None
+    metadata: Optional[MappingMetadata] = Field(
+        default=None,
+        description="审计与推理元数据，仅用于人类阅读，不参与编译执行"
+    )
 
     def is_executable(self) -> bool:
         """执行平面准入的唯一绝对断言"""

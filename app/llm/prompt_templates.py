@@ -2,112 +2,96 @@ import json
 from typing import Dict, Any, Optional, List
 
 # ==========================================
-# 1. System Instruction
+# 新的统一 Mapping Planner Prompt (替代旧版)
 # ==========================================
-COMPILER_SYSTEM_INSTRUCTION = """
-You are an elite Enterprise Data Compiler Backend. Your absolute sole responsibility is to propose a deterministic Transformation Intermediate Representation (IR) mapping graph for the Control Plane.
 
-【CRITICAL CONSTRAINTS - VIOLATION RESULTS IN SYSTEM CRASH】:
-1. Output ONLY the strict JSON object. No markdown, no explanations.
-2. NO Python, SQL, or executable scripts.
-3. Use ONLY explicitly defined operators: 
-   - Math/String: COPY, CONCAT, ADD, SUBTRACT, MULTIPLY, DIVIDE, TO_FLOAT, TO_INT
-   - Clean: PARSE_DATE, CLEAN_CURRENCY, FUZZY_MAP, RESOLVE_ENTITIES, REGEX_EXTRACT, REPLACE, FILLNA
-   - Relational: COMPUTE_EXPR, JOIN, UNION, GROUP_BY, FILTER, EXPLODE, CALCULATE_HIERARCHY
-   - Advanced SQL-like: WINDOW_APPLY, CASE_WHEN, PIVOT, UNPIVOT, ORDER_BY, LIMIT
-4. Topology Rule: Output MUST form a valid Directed Acyclic Graph (DAG) without circular dependencies.
+MAPPING_PLANNER_SYSTEM = """
+You are an Enterprise Mapping Planner.
 
-【SEMANTIC & CONTRACT AWARENESS】:
-5. Semantic Fingerprints: You MUST read the 'fingerprint', 'samples', and 'inferred_semantic_type' in the Source Schema to resolve column name ambiguities.
-6. Relationship Exploitation: If the Source Schema provides 'relationships' (e.g., formula: x * 0.06), use this mathematical proof to construct your ADD/MULTIPLY intermediate steps.
-7. ODCS Contract Compliance: Ensure your IR graph anticipates target ontology rules.
+Your task is to produce a complete MappingSpec that includes both:
+1. A human-readable reasoning summary explaining how you derived the mapping.
+2. An executable AdvancedTransformationIR that maps source columns to target ontology fields.
 
-【ADVANCED STRUCTURAL & LOGIC HANDLING (V3 ARCHITECTURE)】:
-8. Hierarchical / BOM Data: 
-   - Use CALCULATE_HIERARCHY to build recursive trees from flat data. You MUST provide 'id_col' and 'parent_id_col' in options.
-9. Cross-Reference (XREF) Mapping:
-   - Use VALUE_LOOKUP for strict, exact business dictionary mapping (e.g., Plant Codes, Tax Codes). You MUST provide 'xref_name' in options.
-   - Do NOT use FUZZY_MAP for strict ERP codes. FUZZY_MAP is only for messy human text.
-10. Data Enrichment & Global Variables:
-   - If the Target Ontology requires a mandatory field (e.g., 'company_code') that DOES NOT EXIST in the Source Schema, assume it will be injected via the Execution Plane's Enrichment Matrix.
-   - Map it using the 'COPY' operation with a STEP_REF input named logically in uppercase (e.g., {"type": "STEP_REF", "value": "DEFAULT_COMPANY_CODE"}).
-11. Structural Chaos Handling: 
-   - Use FILTER with "condition" to drop invalid summary/sub-total rows.
-   - Use EXPLODE with "column" and "delimiter" to normalize comma-separated multi-values (1NF violations).
-   - Use RESOLVE_ENTITIES with "similarity_threshold" to cluster and unify messy company/supplier names based on frequency.
-12. Advanced Structural & Logic Handling:
-   - Use CASE_WHEN for IF-ELSE conditional routing (options: 'cases', 'default').
-   - Use WINDOW_APPLY for ranking or rolling calculations (options: 'partition_by', 'order_by', 'function').
-   - Use PIVOT/UNPIVOT to normalize cross-tab Excel reports into flat fact tables.
-   - Use REGEX_EXTRACT / REPLACE for complex text pattern manipulation.
-   - Use FILLNA (options: 'method' or 'value') for forward/backward or static null imputation.
+PHASE 1 - REASONING (Do this internally, but output as part of the JSON):
+For each source column, explain:
+- What business concept it represents (use the Canonical Ontology)
+- What evidence supports this (column name, sample values, patterns)
+- What confidence level you have
 
-【CRITICAL ARCHITECTURE RULE - TWO-PHASE MAPPING】:
-1. PHASE 1 (Semantic Normalization): You MUST first create intermediate steps that map source columns to the **Canonical Ontology** field names (e.g., `canonical_partner_id`, `canonical_amount`). Use the Canonical field names as intermediate step names (e.g., `step_canonical_partner_id`).
-2. PHASE 2 (Physical Adaptation): The `output_mappings` MUST then copy/transform these canonical intermediate steps into the physical `Target Ontology` fields.
-3. Never map source columns directly to physical target columns unless the target field exactly matches the canonical field name.
-4. In `intermediate_steps`, always prefer using `STEP_REF` from source columns first, then apply business transformations (e.g., CLEAN_CURRENCY) to produce canonical values.
-5. In `output_mappings`, use `STEP_REF` to reference the canonical intermediate steps you just built.
+PHASE 2 - IR GENERATION (Based on reasoning above):
+Generate the AdvancedTransformationIR that maps source columns to target ontology fields.
 
-【FEW-SHOT STRUCTURAL EXAMPLE】:
-If Source has 'amount_str' and Target needs 'total_tax' (amount * 0.06) and a missing mandatory 'profit_center':
+CRITICAL RULES:
+1. Output ONLY a valid JSON object with exactly these fields:
+   - "reasoning_summary": string (overall explanation)
+   - "evidence_chain": list of evidence objects (each with evidence_type, source, supporting_data, weight)
+   - "ir_graph": AdvancedTransformationIR object
+
+2. IR must use ONLY the operators defined in the operator registry:
+   COPY, CONCAT, ADD, SUBTRACT, MULTIPLY, DIVIDE, TO_FLOAT, TO_INT,
+   PARSE_DATE, CLEAN_CURRENCY, FUZZY_MAP, RESOLVE_ENTITIES, REGEX_EXTRACT, REPLACE, FILLNA,
+   COMPUTE_EXPR, JOIN, UNION, GROUP_BY, FILTER, EXPLODE,
+   WINDOW_APPLY, CASE_WHEN, PIVOT, UNPIVOT, ORDER_BY, LIMIT,
+   CALCULATE_HIERARCHY, VALUE_LOOKUP
+
+3. Topology Rule: IR must form a valid DAG (no cycles).
+
+4. For mandatory fields in target ontology that have no source column, use global constants (e.g., "DEFAULT_COMPANY_CODE") as STEP_REF inputs.
+
+5. Evidence types you can use:
+   - "column_name_similarity"
+   - "regex_pattern_match"
+   - "top_value_distribution"
+   - "numeric_distribution"
+   - "ontology_definition_match"
+   - "historical_registry_hit"
+   - "llm_reasoning"
+
+EXAMPLE EVIDENCE_ITEM:
 {
-  "pipeline_version": "2.0",
-  "intermediate_steps": {
-    "step_clean_num": {
-      "operation": "CLEAN_CURRENCY",
-      "inputs": [{"type": "COLUMN_REF", "value": "amount_str"}],
-      "target_type": "float"
-    },
-    "step_calc_tax": {
-      "operation": "COMPUTE_EXPR",
-      "inputs": [],
-      "options": {"formula": "step_clean_num * 0.06"},
-      "target_type": "float"
-    }
-  },
-  "output_mappings": {
-    "total_tax": {
-      "operation": "COPY",
-      "inputs": [{"type": "STEP_REF", "value": "step_calc_tax"}],
-      "target_type": "float"
-    },
-    "profit_center": {
-      "operation": "COPY",
-      "inputs": [{"type": "STEP_REF", "value": "DEFAULT_PROFIT_CENTER"}],
-      "target_type": "string"
-    }
-  }
+  "evidence_type": "column_name_similarity",
+  "source": "Column name 'cust_no' matches canonical 'partner_id'",
+  "supporting_data": {"similarity_score": 0.92},
+  "weight": 0.8
 }
+
+EXAMPLE IR NODE:
+{
+  "operation": "PARSE_DATE",
+  "inputs": [{"type": "COLUMN_REF", "value": "PDate"}],
+  "target_type": "date",
+  "options": {}
+}
+
+Now produce the MappingSpec JSON.
 """
 
-# ==========================================
-# 2. User Prompt Builder
-# ==========================================
-def build_mapping_prompt(
-    source_schema: Dict[str, Any], 
+
+def build_mapping_planner_prompt(
+    source_schema: Dict[str, Any],
+    evidence_pack: Dict[str, Any],
     canonical_ontology: Dict[str, Any],
     target_ontology: Dict[str, Any],
-    mapping_hints: Optional[List[Dict[str, Any]]] = None
 ) -> str:
-    """Build the user data payload for triggering IR reasoning"""
-    
+    """构建用户 Prompt（包含源 Schema、证据包、规范本体、目标本体）"""
     prompt_parts = [
-        "Align the incoming Source Schema to the Target Business Ontology by creating an intermediate execution graph.",
-        "\n【Incoming Source Schema (Enhanced with Semantic Profiling)】:",
-        json.dumps(source_schema, indent=2),
-        "\n【Canonical Enterprise Model (The Semantic Standard)】:",
-        json.dumps(canonical_ontology, indent=2),
-        "\n【Physical Target System (ERP Specific)】:",
-        json.dumps(target_ontology, indent=2),
-        "\n【Instruction】: First build `intermediate_steps` that map source columns to Canonical concepts, then use `output_mappings` to adapt those canonical steps to the Physical Target fields. Use `STEP_REF` to reference intermediate steps in outputs."
+        "Please plan a complete mapping from the source schema to the target ontology.",
+        "",
+        "## Source Schema (Structure + Constraints)",
+        json.dumps(source_schema, indent=2, default=str),
+        "",
+        "## Source Evidence Pack (Samples, Frequencies, Patterns)",
+        json.dumps(evidence_pack, indent=2, default=str),
+        "",
+        "## Canonical Ontology (Standard Semantic Concepts)",
+        json.dumps(canonical_ontology, indent=2, default=str),
+        "",
+        "## Target Physical Ontology (Destination ERP Schema)",
+        json.dumps(target_ontology, indent=2, default=str),
+        "",
+        "## Output Instructions",
+        "Return a JSON object with fields: 'reasoning_summary', 'evidence_chain', 'ir_graph'.",
+        "Ensure the IR graph uses only the allowed operators and forms a valid DAG.",
+        "Include evidence for each important mapping decision."
     ]
-
-    if mapping_hints:
-        prompt_parts.extend([
-            "\n【Historical Mapping Recall (Vector-like Search Results)】:",
-            "The following are high-confidence historical mappings recalled from the Registry. Prioritize these mappings if the semantic fingerprints align:",
-            json.dumps(mapping_hints, indent=2)
-        ])
-
     return "\n".join(prompt_parts)

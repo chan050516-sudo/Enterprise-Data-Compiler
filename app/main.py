@@ -6,40 +6,30 @@ import logging
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from app.config.settings import settings
 
-# --- Layer 1: Connectors ---
+from app.config.settings import settings
 from app.connectors.csv_connector import CSVConnector
-# --- Layer 3: Ontology & Policy ---
-from app.ontology.business_schema import OntologyRegistryManager
-# --- Control Plane (NEW) ---
+from app.knowledge.knowledge_base import KnowledgeBase
+from app.schema.semantic_profiler import SemanticProfiler
+from app.ontology.schema_introspection import SchemaInspector
+from app.llm.llm_client import GeminiClient
+from app.llm.mapping_planner import MappingPlanner
 from app.control.spec_repo import SpecRepository
-# --- Layer 7: Review Engine ---
-from app.review.quarantine_viewer import QuarantineViewer
-# --- Layer 8: Output Persistence ---
-from app.output.exporter import SecondaryExporter
-# --- Core Orchestrator (Execution Plane) ---
+from app.control.governor import SpecGovernor
 from app.execution.orchestrator import PipelineOrchestrator
 from app.execution.state_machine import BatchLifecycle, BatchState
+from app.harness.ir_validator import IRValidator
+from app.review.quarantine_viewer import QuarantineViewer
+from app.output.exporter import SecondaryExporter
 
-from app.llm.mapper import SemanticMapper
-from app.llm.llm_client import GeminiClient
-from app.control.governor import SpecGovernor
+logger = None
 
-llm_client = GeminiClient()
-semantic_mapper = SemanticMapper(llm_client)
-spec_governor = SpecGovernor(SpecRepository())
-
-
-# ==========================================
-# 1. 生产级日志配置 (Audit Logging)
-# ==========================================
 def setup_logging():
+    global logger
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"compiler_run_{timestamp}.log")
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -48,38 +38,28 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
-    return logging.getLogger("CompilerMain")
+    logger = logging.getLogger("CompilerMain")
 
-logger = setup_logging()
 
-# ==========================================
-# 2. 命令行参数解析 (CLI Interface)
-# ==========================================
 def parse_args():
-    parser = argparse.ArgumentParser(description="🚀 Autonomous Enterprise Data Compiler (V2.0)")
-    
-    # 核心输入/输出路径
+    parser = argparse.ArgumentParser(description="🚀 Autonomous Enterprise Data Compiler (V3.0)")
     parser.add_argument("--source", type=str, required=True, help="Path to the messy source CSV file")
     parser.add_argument("--target-ontology", type=str, required=True, help="Name of the target ontology to compile into")
     parser.add_argument("--registry-file", type=str, default="app/ontology/ontology_registry.json", help="Path to Layer 3 JSON registry")
-    parser.add_argument("--introspect", action="store_true", help="Auto-introspect target DB and generate ontology registry JSON")
-    parser.add_argument("--domain", type=str, required=True, help="Business Domain (e.g., 'POS_TO_SAP') to fetch LOCKED MappingSpec")
-
-    # 物理持久化路径
+    parser.add_argument("--domain", type=str, required=True, help="Business Domain (e.g., 'POS_TO_SAP')")
     parser.add_argument("--db-out", type=str, default="output/enterprise_erp.db", help="Path to the target SQLite database")
     parser.add_argument("--csv-out", type=str, default="output/compiled_snapshot.csv", help="Path to secondary CSV export")
     parser.add_argument("--quarantine-out", type=str, default="output/quarantine_payload.json", help="Path to dump Layer 7 Viewer Payload")
-    
+    parser.add_argument("--auto-approve", action="store_true", help="Skip human review, auto-lock the generated spec")
+    parser.add_argument("--skip-generation", action="store_true", help="Skip generation, only run existing LOCKED spec")
     return parser.parse_args()
 
-# ==========================================
-# 3. 核心执行主流程 (Main Execution Routine)
-# ==========================================
+
 def main():
-    # 1. 初始化环境与参数
     load_dotenv()
     args = parse_args()
-    
+    setup_logging()
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("FATAL: GEMINI_API_KEY environment variable is not set.")
@@ -90,122 +70,138 @@ def main():
     logger.info("=" * 60)
 
     try:
-        # 如果启用 introspect 模式
-        if args.introspect:
-            from app.schema.target_schema_introspector import TargetSchemaIntrospector
-            db_path = args.db_out
-            if not os.path.exists(db_path):
-                logger.error(f"Target DB {db_path} does not exist. Please ensure the database exists.")
-                sys.exit(2)
-            output_file = args.registry_file  # 使用 --registry-file 指定的文件
-            TargetSchemaIntrospector.save_to_registry(args.db_out, output_file)
-            logger.info(f"✅ Target registry generated. You can now run without --introspect using: --registry-file {output_file}")
-            sys.exit(0)  # 不执行后续流水线
+        # 1. 初始化知识库
+        kb = KnowledgeBase(
+            registry_path=args.registry_file,
+            canonical_path=str(settings.CANONICAL_ONTOLOGY_PATH),
+            mapping_registry_path="app/ontology/mapping_registry.json"  # 可选
+        )
+        target_ontology = kb.get_target_ontology(args.target_ontology)
+        canonical_ontology = kb.get_canonical_ontology()
 
-        # 2. 挂载 Layer 3 契约注册表
-        logger.info("[Init] Booting Ontology Registry Manager...")
-        registry = OntologyRegistryManager(args.registry_file, canonical_path=settings.CANONICAL_ONTOLOGY_PATH)
-        target_ontology = registry.get_ontology(args.target_ontology)
-        with open(settings.CANONICAL_ONTOLOGY_PATH, 'r', encoding='utf-8') as f:
-            canonical_ontology = json.load(f)
-
-        # 3. 连接控制平面，提取绝对锁定的 MappingSpec
-        logger.info(f"[Init] Fetching LOCKED MappingSpec for domain: {args.domain}")
-        spec_repo = SpecRepository() # 默认连接 control_plane.db
-        active_spec = spec_repo.get_active_locked_spec(args.domain)
-        
-        if not active_spec:
-            logger.critical(f"FATAL: No LOCKED MappingSpec found for domain '{args.domain}'. Pipeline aborted.")
-            sys.exit(2)
-        
-        batch_id = f"BATCH-{uuid.uuid4().hex[:8].upper()}"
-        lifecycle = BatchLifecycle(batch_id, active_spec.spec_id)
-
-        # 4. Layer 1 物理数据源读取
-        logger.info(f"[Init] Engaging Layer 1 Connector for {args.source}...")
+        # 2. 读取源数据
         connector = CSVConnector(source_path=args.source)
         source_df = connector.read_data()
-        
-        # 5. 初始化执行平面中枢 (注入目标数据库路径，交由编排器内部处理写库与 Saga 冲销)
-        orchestrator = PipelineOrchestrator(
-            db_path=args.db_out,
-            semantic_mapper=semantic_mapper,
-            spec_governor=spec_governor
-        )
+        source_schema = SchemaInspector.from_dataframe(source_df)
+        evidence_pack = SemanticProfiler.build_evidence_pack(source_df)
 
-        # 6. 🚀 点火：执行核心自治流水线
-        clean_df, quarantine_df, audit_report, lifecycle, trace = orchestrator.run_pipeline(
-            source_df=source_df,
-            active_spec=active_spec,
-            target_ontology=target_ontology,
-            reference_data=None
-        )
+        # 3. 控制平面
+        spec_repo = SpecRepository()
+        governor = SpecGovernor(spec_repo)
 
-        # 在 PASS 分支和 QUARANTINE 分支中，都将 trace 写入文件
-        trace_file = os.path.join(os.path.dirname(args.csv_out), f"trace_{trace['batch_id']}.json")
-        with open(trace_file, 'w', encoding='utf-8') as f:
-            json.dump(trace, f, indent=2, default=str)  # default=str 处理 datetime
+        active_spec = None
+        if not args.skip_generation:
+            # 检查是否已有 LOCKED spec
+            active_spec = spec_repo.get_active_locked_spec(args.domain)
+            if active_spec:
+                logger.info(f"Found existing LOCKED MappingSpec: {active_spec.spec_id}")
+            else:
+                logger.info("No LOCKED spec found. Generating new MappingSpec via MappingPlanner...")
+                llm_client = GeminiClient(api_key=api_key)
+                planner = MappingPlanner(llm_client)
 
-        # 控制台打印摘要
-        logger.info("📊 Execution Trace Summary:")
-        logger.info(f"  Batch ID: {trace['batch_id']}")
-        logger.info(f"  Compilation steps: {len(trace['compilation']['steps'])}")
-        if trace.get('trust_evaluation'):
-            te = trace['trust_evaluation']
-            logger.info(f"  Trust Score: {te['trust_score']:.4f}  Decision: {te['routing_decision']}")
-            logger.info(f"  Quarantined rows: {te['quarantined_rows']} / {te['total_rows']}")
-        if trace.get('saga') and trace['saga']['triggered']:
-            logger.info(f"  ⚠️ Saga Compensation triggered, {trace['saga']['reversal_rows']} reversal records written.")
-        logger.info(f"  Final state: {lifecycle.current_state.value}")
-        logger.info(f"  Trace saved to: {trace_file}")
+                spec = planner.plan(
+                    source_schema=source_schema,
+                    evidence_pack=evidence_pack,
+                    canonical_ontology=canonical_ontology,
+                    target_ontology=target_ontology,
+                    domain=args.domain,
+                    version="v1.0"
+                )
+                # 保存为 DRAFT
+                spec_repo.save(spec)
+                logger.info(f"Generated DRAFT MappingSpec: {spec.spec_id}")
 
-        # 7. 处理最终决议 (The Final Resolution)
-        if audit_report.routing_decision == "PASS" and lifecycle.current_state == BatchState.COMMITTED:
-            # 决议：放行且入库成功 (Layer 8 DB 写入已在 Orchestrator 内部完成)
-            logger.info("🟢 Pipeline Decision: PASS. Generating secondary snapshots...")
-            os.makedirs(os.path.dirname(args.csv_out), exist_ok=True)
-            
-            # 导出 CSV 审计快照
-            SecondaryExporter.to_csv(clean_df, args.csv_out)
-            
-            # 写入审计报告日志
-            audit_report.batch_id = lifecycle.batch_id
-            audit_report.spec_id = active_spec.spec_id
-            report_path = os.path.join(os.path.dirname(args.csv_out), f"audit_{audit_report.report_id}.json")
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write(audit_report.to_json())
-                
-            logger.info(f"🎉 Job Completed Successfully! {len(clean_df)} records secured in DB.")
-            sys.exit(0) # 0 表示成功
-
+                # 自动提交审核并锁定（如果 auto-approve）
+                if args.auto_approve:
+                    logger.warning("Auto-approve enabled. Submitting for approval and locking...")
+                    governor.submit_for_approval(spec.spec_id, submitter="SYSTEM_AUTO")
+                    active_spec = governor.approve_and_lock(spec.spec_id, approver_id="SYSTEM_AUTO")
+                    logger.info(f"Spec {active_spec.spec_id} is now LOCKED.")
+                else:
+                    logger.info(f"Spec {spec.spec_id} is in DRAFT state. Please review and lock manually.")
+                    # 此处可以退出，或继续执行（但如果没有 LOCKED spec，执行平面会报错）
+                    sys.exit(0)  # 或提示人工操作
         else:
-            # 决议：隔离 (可能由于数据错误，或由于 DB 写入崩溃触发了 Saga 补偿)
-            logger.warning(f"🔴 Pipeline Decision: QUARANTINE. Final State: {lifecycle.current_state.value}")
-            
-            if lifecycle.current_state == BatchState.QUARANTINED and "Saga" in str(lifecycle.transition_history[-1].get("reason", "")):
-                logger.critical("⚠️ NOTE: This batch was quarantined due to a physical DB commit failure. Saga Compensation was executed.")
+            # 跳过生成，直接获取 LOCKED spec
+            active_spec = spec_repo.get_active_locked_spec(args.domain)
+            if not active_spec:
+                logger.critical(f"No LOCKED MappingSpec found for domain '{args.domain}'. Aborting.")
+                sys.exit(2)
 
-            # 提取供前端渲染的细胞级高亮矩阵
-            review_payload = QuarantineViewer.generate_review_payload(quarantine_df, audit_report)
-            
-            # 导出 Payload 供前端/运维系统加载
-            os.makedirs(os.path.dirname(args.quarantine_out), exist_ok=True)
-            with open(args.quarantine_out, 'w', encoding='utf-8') as f:
-                json.dump(review_payload, f, ensure_ascii=False, indent=2)
-            
-            # 同时导出一份 Markdown 验尸报告供人直观阅读
-            audit_report.batch_id = lifecycle.batch_id
-            audit_report.spec_id = active_spec.spec_id
-            md_path = args.quarantine_out.replace(".json", "_report.md")
-            with open(md_path, 'w', encoding='utf-8') as f:
-                f.write(audit_report.to_markdown())
-                
-            logger.error(f"🛑 Job Halted. {len(quarantine_df)} rows routed to Quarantine. Payload saved to {args.quarantine_out}")
-            sys.exit(1) # 1 表示发生隔离中止
+        # 4. 执行编译（如果有 LOCKED spec）
+        if active_spec and active_spec.is_executable():
+            # 验证 IR（可选，但推荐）
+            IRValidator.validate_topology(active_spec.ir_graph, list(source_df.columns), target_ontology)
+
+            # 初始化执行平面
+            orchestrator = PipelineOrchestrator(
+                db_path=args.db_out,
+                mapping_planner=None,  # 补丁生成暂不启用，可后续添加
+                knowledge_base=kb,
+                spec_governor=governor
+            )
+
+            clean_df, quarantine_df, audit_report, lifecycle, trace = orchestrator.run_pipeline(
+                source_df=source_df,
+                active_spec=active_spec,
+                target_ontology=target_ontology,
+                reference_data=None
+            )
+
+            # 输出结果（与之前相同）
+            trace_file = os.path.join(os.path.dirname(args.csv_out), f"trace_{trace['batch_id']}.json")
+            with open(trace_file, 'w', encoding='utf-8') as f:
+                json.dump(trace, f, indent=2, default=str)
+
+            logger.info("📊 Execution Trace Summary:")
+            logger.info(f"  Batch ID: {trace['batch_id']}")
+            logger.info(f"  Compilation steps: {len(trace['compilation']['steps'])}")
+            if trace.get('trust_evaluation'):
+                te = trace['trust_evaluation']
+                logger.info(f"  Trust Score: {te['trust_score']:.4f}  Decision: {te['routing_decision']}")
+                logger.info(f"  Quarantined rows: {te['quarantined_rows']} / {te['total_rows']}")
+            logger.info(f"  Final state: {lifecycle.current_state.value}")
+
+            if audit_report.routing_decision == "PASS" and lifecycle.current_state == BatchState.COMMITTED:
+                logger.info("🟢 Pipeline Decision: PASS. Generating secondary snapshots...")
+                os.makedirs(os.path.dirname(args.csv_out), exist_ok=True)
+                SecondaryExporter.to_csv(clean_df, args.csv_out)
+
+                audit_report.batch_id = lifecycle.batch_id
+                audit_report.spec_id = active_spec.spec_id
+                report_path = os.path.join(os.path.dirname(args.csv_out), f"audit_{audit_report.report_id}.json")
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    f.write(audit_report.to_json())
+
+                logger.info(f"🎉 Job Completed Successfully! {len(clean_df)} records secured in DB.")
+                sys.exit(0)
+            else:
+                logger.warning(f"🔴 Pipeline Decision: QUARANTINE. Final State: {lifecycle.current_state.value}")
+                review_payload = QuarantineViewer.generate_review_payload(quarantine_df, audit_report)
+                os.makedirs(os.path.dirname(args.quarantine_out), exist_ok=True)
+                with open(args.quarantine_out, 'w', encoding='utf-8') as f:
+                    json.dump(review_payload, f, ensure_ascii=False, indent=2)
+
+                audit_report.batch_id = lifecycle.batch_id
+                audit_report.spec_id = active_spec.spec_id
+
+                base = os.path.splitext(args.quarantine_out)[0]
+                md_path = f"{base}_report.md"
+
+                with open(md_path, 'w', encoding='utf-8') as f:
+                    f.write(audit_report.to_markdown())
+
+                logger.error(f"🛑 Job Halted. {len(quarantine_df)} rows routed to Quarantine.")
+                sys.exit(1)
+        else:
+            logger.info("No LOCKED spec available. Exiting.")
+            sys.exit(0)
 
     except Exception as e:
         logger.exception(f"💥 FATAL SYSTEM PANIC: {str(e)}")
-        sys.exit(2) # 2 表示发生严重的系统崩溃级别的异常
+        sys.exit(2)
+
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 from app.control.governor import SpecGovernor
 from app.schema.semantic_profiler import SemanticProfiler
-from app.llm.mapper import SemanticMapper
+from app.llm.mapping_planner import MappingPlanner
+from app.knowledge.knowledge_base import KnowledgeBase
 from app.harness.ir_validator import IRValidator
 from app.runtime.compiler import IRCompiler
 from app.harness.trust_evaluator import DataTrustEngine
@@ -26,15 +27,17 @@ class PipelineOrchestrator:
     Global Orchestration Hub: 驱动 8 层数据编译流水线，包含带统计学视觉的 MAPE-K 自愈循环。
     """
     def __init__(self, db_path: str = "enterprise_target.db", 
-                 semantic_mapper: Optional[SemanticMapper] = None,
-                 spec_governor: Optional[SpecGovernor] = None):
+             mapping_planner: Optional[MappingPlanner] = None,
+             knowledge_base: Optional[KnowledgeBase] = None,
+             spec_governor: Optional[SpecGovernor] = None):
         # self.mapper = SemanticMapper(llm_client)
         self.compiler = IRCompiler()
         self.enforcer = DataTrustEngine() 
         self.reconciler = ReconciliationEngine() # Layer 7
         self.db_writer = SQLiteWriter(db_path=db_path) 
         self.saga_manager = SagaManager(db_writer=self.db_writer)
-        self.semantic_mapper = semantic_mapper
+        self.mapping_planner = mapping_planner
+        self.knowledge_base = knowledge_base
         self.spec_governor = spec_governor
 
     def run_pipeline(
@@ -117,7 +120,7 @@ class PipelineOrchestrator:
             lifecycle.transition_to(BatchState.QUARANTINED, f"Low Trust Score: {audit_report.trust_score}")
             logger.warning("⚠️ Batch Quarantined. Generating async feedback for Control Plane...")
             
-            if not quarantine_df.empty and self.semantic_mapper and self.spec_governor:
+            if not quarantine_df.empty and self.mapping_planner and self.spec_governor:
                 try:
                     # 提取失败上下文（使用已有的 _extract_failure_context）
                     failure_context = self._extract_failure_context(
@@ -125,32 +128,29 @@ class PipelineOrchestrator:
                         audit_report=audit_report,
                         total_rows=len(source_df)
                     )
-                    # 将上下文转换为 mapping_hints（格式可自定义，例如直接传整个 dict）
-                    hints = [{"failure_context": failure_context}]  # 简化处理
 
                     # 获取源 Schema
                     source_schema = SchemaInspector.from_dataframe(source_df)
 
+                    evidence_pack = SemanticProfiler.build_evidence_pack(source_df)
+
                     # 生成补丁规格（需要传入 canonical_ontology，若不可用则用 target_ontology）
                     # 注意：此处 canonical_ontology 可能需要从外部传入，这里假设通过 run_pipeline 参数或类属性提供
-                    canonical_onto = getattr(self, '_canonical_ontology', None) or target_ontology
+                    canonical_onto = self.knowledge_base.get_canonical_ontology()
 
-                    patch_spec = self.semantic_mapper.generate_spec(
+                    patch_spec = self.mapping_planner.plan(
                         source_schema=source_schema,
+                        evidence_pack=evidence_pack,
                         canonical_ontology=canonical_onto,
                         target_ontology=target_ontology,
-                        mapping_hints=hints,
-                        patch_version=f"{active_spec.version}-patch",
+                        domain=active_spec.domain,
+                        version=f"{active_spec.version}-patch",
                         parent_spec_id=active_spec.spec_id
                     )
                     # 通过 Governor 保存为 DRAFT
-                    self.spec_governor.propose_new_spec(
-                        domain=active_spec.domain,
-                        ir_graph=patch_spec.ir_graph,
-                        version=patch_spec.version,
-                        creator="AI_AUTO_PATCH",
-                        parent_spec_id=active_spec.spec_id
-                    )
+                    from app.control.spec_repo import SpecRepository
+                    repo = SpecRepository()
+                    repo.save(patch_spec)
                     logger.info(f"🔄 Auto-generated patch spec {patch_spec.spec_id} based on failure context.")
                 except Exception as e:
                     logger.error(f"Failed to auto-generate patch: {e}")
