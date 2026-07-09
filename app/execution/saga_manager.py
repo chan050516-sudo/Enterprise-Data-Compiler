@@ -17,7 +17,7 @@ class SagaManager:
         self.inverse_compiler = InverseCompiler()
         self.db_writer = db_writer
 
-    def execute_compensation(self, partially_committed_df: pd.DataFrame, spec: MappingSpec, target_ontology: Dict[str, Any], trace: Dict[str, Any] = None):
+    def execute_compensation(self, partially_committed_df: pd.DataFrame, spec: MappingSpec, batch_id: str, target_ontology: Dict[str, Any], trace: Dict[str, Any] = None):
         logger.warning("🛡️ SAGA MANAGER ACTIVATED: Commencing Reversal Transaction...")
         
         try:
@@ -36,7 +36,7 @@ class SagaManager:
                 
             # 2. 将冲销数据打入死信/应急通道写入目标库
             # 这里的 fallback_commit 使用了独立事务或紧急 API 接口
-            self.db_writer.fallback_commit_reversal(reversal_df, target_ontology["dataset_name"])
+            self.db_writer.fallback_commit_reversal(reversal_df, target_ontology["dataset_name"], batch_id)
             
             logger.info("🛡️ SAGA COMPENSATION COMPLETE: Target system state successfully neutralized (zeroed out).")
         except Exception as e:

@@ -98,7 +98,7 @@ class PipelineOrchestrator:
             lifecycle.transition_to(BatchState.COMMITTING)
             try:
                 logger.info("[Layer 8] Attempting Database Commit...")
-                self.db_writer.commit(clean_df, target_ontology["dataset_name"])
+                self.db_writer.commit(clean_df, target_ontology["dataset_name"], batch_id)
                 lifecycle.transition_to(BatchState.COMMITTED, "Physical DB Commit Successful.")
                 
             except Exception as e:

@@ -24,7 +24,7 @@ class SQLiteWriter:
         # [修改 1] 从 classmethod 改为实例，持有数据库连接状态
         self.db_path = db_path
 
-    def commit(self, clean_df: pd.DataFrame, target_ontology: Dict[str, Any]) -> int:
+    def commit(self, clean_df: pd.DataFrame, target_ontology: Dict[str, Any], batch_id: str) -> int:
         """
         标准正向物理入库 (被 Orchestrator 调用)
         """
@@ -47,7 +47,7 @@ class SQLiteWriter:
             sanitized_df = self._sanitize_for_sqlite(clean_df)
 
             # 3. 极速对齐绑定与入库
-            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key)
+            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key, batch_id)
             
             conn.commit()
             logger.info(f"🎉 Successfully persisted {rows_inserted} records to '{table_name}' in SQLite DB.")
@@ -61,7 +61,7 @@ class SQLiteWriter:
             cursor.close()
             conn.close()
 
-    def fallback_commit_reversal(self, reversal_df: pd.DataFrame, target_ontology: Dict[str, Any]) -> int:
+    def fallback_commit_reversal(self, reversal_df: pd.DataFrame, target_ontology: Dict[str, Any], batch_id: str) -> int:
         """
         [新增] Saga 补偿专属接口 (被 SagaManager 调用)
         使用独立短事务强行写入红字冲销凭证，抹平账目。
@@ -82,7 +82,7 @@ class SQLiteWriter:
         try:
             self._ensure_table_exists(cursor, table_name, fields_config, primary_key)
             sanitized_df = self._sanitize_for_sqlite(reversal_df)
-            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key)
+            rows_inserted = self._execute_bulk_insert(cursor, table_name, sanitized_df, fields_config, primary_key, batch_id)
             
             conn.commit()
             logger.critical(f"✅ SAGA: Reversal records successfully hard-committed to target database.")
@@ -100,6 +100,11 @@ class SQLiteWriter:
     def _ensure_table_exists(self, cursor, table_name: str, fields_config: Dict[str, Any], primary_key=None):
         columns_ddl = []
         pk_columns = []
+
+        # 强制加入批次水印列
+        columns_ddl.append('"-batch_id" TEXT NOT NULL')
+        pk_columns.append('"-batch_id"')
+
         # 将 primary_key 统一转为列表处理
         pk_list = primary_key if isinstance(primary_key, list) else [primary_key] if primary_key else []
        
@@ -110,9 +115,8 @@ class SQLiteWriter:
             if col_name in pk_list:
                 pk_columns.append(f'"{col_name}"')
 
-        if pk_columns:
-            columns_ddl.append(f'PRIMARY KEY ({", ".join(pk_columns)})')
-
+        # 联合主键 (batch_id + 业务主键) 保证完全幂等
+        columns_ddl.append(f'PRIMARY KEY ({", ".join(pk_columns)})')
         columns_ddl.append('"-compiled_at" TEXT DEFAULT CURRENT_TIMESTAMP')
         ddl_query = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(columns_ddl)});'
         cursor.execute(ddl_query)
@@ -126,8 +130,11 @@ class SQLiteWriter:
                 sanitized_df[col] = sanitized_df[col].replace({np.nan: None})
         return sanitized_df
 
-    def _execute_bulk_insert(self, cursor, table_name: str, sanitized_df: pd.DataFrame, fields_config: Dict[str, Any], primary_key=None) -> int:
-        columns_to_insert = [col for col in fields_config.keys() if col in sanitized_df.columns]
+    def _execute_bulk_insert(self, cursor, table_name: str, sanitized_df: pd.DataFrame, batch_id: str, fields_config: Dict[str, Any], primary_key=None) -> int:
+        sanitized_df = sanitized_df.copy()
+        sanitized_df["-batch_id"] = batch_id
+        
+        columns_to_insert = ["-batch_id"] + [col for col in fields_config.keys() if col in sanitized_df.columns]
         placeholders = ", ".join(["?"] * len(columns_to_insert))
         col_names = ", ".join([f'"{c}"' for c in columns_to_insert])
 

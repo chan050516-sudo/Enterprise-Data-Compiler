@@ -38,7 +38,7 @@ class ReconciliationEngine:
             }
 
         logger.info("[Layer 7] Commencing Deep Business Reconciliation...")
-        
+         
         contracts = target_ontology.get("odcs_contracts", {})
         global_invariants = contracts.get("global_invariants", [])
         row_rules = contracts.get("row_level_rules", [])
@@ -48,6 +48,17 @@ class ReconciliationEngine:
 
         # 2. 执行宏观/跨模块财务不变量对账 (Global Invariants)
         for inv in global_invariants:
+
+            # 【条件过滤】支持 apply_if 表达式
+            apply_if = inv.get("apply_if")
+            if apply_if:
+                try:
+                    # 如果表达式结果为 False，跳过该不变量检查
+                    if not df.eval(apply_if).all():
+                        continue
+                except Exception:
+                    pass  # 表达式无效则默认执行检查
+
             inv_type = inv.get("type")
             inv_name = inv.get("name", "Unnamed Invariant")
             
@@ -260,7 +271,12 @@ class ReconciliationEngine:
             return
 
         # 1. 计算每个节点下，其所有【直接子节点】的 total_col 之和
-        children_sum = df.groupby(parent_col)[total_col].sum().to_dict()
+        children_sum = df.groupby(parent_col)[total_col].sum().rename('_child_sum')
+        merged = df[[id_col, value_col, total_col]].merge(children_sum, left_on=id_col, right_index=True, how='left')
+        merged['_child_sum'] = merged['_child_sum'].fillna(0)
+        
+        expected_total = merged[value_col] + merged['_child_sum']
+        violators = df[~np.isclose(merged[total_col], expected_total, atol=1e-4)].index.tolist()
 
         # 2. 对账核销函数
         def check_node_balance(row):

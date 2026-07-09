@@ -84,7 +84,21 @@
           "metric": "volume_check",
           "min_rows": 1
         }
+      ],
+      "global_invariants": [
+        {
+          "name": "double_entry_invariant",
+          "type": "double_entry",
+          "variance_account": "GL_ROUNDING_DIFF",
+          "tolerance": 1.0
+        }
       ]
+    },
+    "reversal_mapping": {
+      "fields": {
+        "doc_type": { "action": "set", "value": "REVERSED" },
+        "posting_date": { "action": "now" }
+      }
     }
   },
 
