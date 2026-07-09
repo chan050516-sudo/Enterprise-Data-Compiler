@@ -94,7 +94,7 @@ class SpecRepository:
 
     def promote_to_locked(self, spec_id: str, approver_id: str, approved_at: str) -> None:
         """
-        原子地将指定 spec 转为 LOCKED，并归档同域其他 LOCKED 规格。
+        原子地将指定 spec 转为 LOCKED, 并归档同域其他 LOCKED 规格。
         确保同一 domain 只有一个 LOCKED 规格。
         """
         with self._lock, self._get_connection() as conn:

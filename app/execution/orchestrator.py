@@ -2,6 +2,7 @@ import logging
 import uuid
 import pandas as pd
 from typing import Dict, Any, Tuple, Optional
+from datetime import datetime, timezone
 
 from app.control.governor import SpecGovernor
 from app.schema.semantic_profiler import SemanticProfiler
@@ -48,6 +49,14 @@ class PipelineOrchestrator:
         batch_id = f"BATCH-{uuid.uuid4().hex[:8].upper()}"
         lifecycle = BatchLifecycle(batch_id, active_spec.spec_id)
 
+        trace = {
+            "batch_id": batch_id,
+            "spec_id": active_spec.spec_id,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "compilation": {"steps": []},
+            "status": "PASS"  # 临时
+        }
+
         logger.info("--- 🚀 Starting Stateful Execution Plane | Batch: {batch_id} ---")
         
         # [防线 0]: 控制平面准入断言
@@ -62,7 +71,8 @@ class PipelineOrchestrator:
             ir=active_spec.ir_graph, 
             target_ontology=target_ontology,
             extra_tables=extra_dataframes,               # 透传给 VALUE_LOOKUP
-            global_constants=active_spec.global_constants # 透传数据增补矩阵
+            global_constants=active_spec.global_constants, # 透传数据增补矩阵
+            trace=trace
         )
         lifecycle.transition_to(BatchState.COMPILED, "Vectorized compilation finished.")
 
@@ -72,10 +82,11 @@ class PipelineOrchestrator:
             compiled_df=compiled_df, 
             target_ontology=target_ontology,
             reference_data=reference_data,
+            trace=trace
             # base_mapping_confidence=1.0 # 锁定态契约自带最高初始信任
         )
         
-        self.reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology, extra_dataframes=extra_dataframes)
+        self.reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology, extra_dataframes=extra_dataframes, trace=trace)
 
         decision = audit_report.routing_decision
         clean_df, quarantine_df = self._route_data(compiled_df, audit_report)
@@ -95,7 +106,7 @@ class PipelineOrchestrator:
                 lifecycle.transition_to(BatchState.COMPENSATING, f"DB Crash: {str(e)}")
                 
                 # 触发 Saga 逆向冲销
-                self.saga_manager.execute_compensation(clean_df, active_spec, target_ontology)
+                self.saga_manager.execute_compensation(clean_df, active_spec, target_ontology, trace=trace)
                 
                 # 冲销完毕后，批次被安全打入隔离区
                 lifecycle.transition_to(BatchState.QUARANTINED, "Saga Compensation applied. Batch safely quarantined.")
@@ -144,7 +155,7 @@ class PipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"Failed to auto-generate patch: {e}")
 
-        return clean_df, quarantine_df, audit_report, lifecycle
+        return clean_df, quarantine_df, audit_report, lifecycle, trace
 
     def _route_data(self, compiled_df: pd.DataFrame, audit_report: TrustAuditReport) -> Tuple[pd.DataFrame, pd.DataFrame]:
         quarantine_indices = audit_report.quarantine_indices
