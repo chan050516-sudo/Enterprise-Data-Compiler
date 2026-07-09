@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List, Any
 import pandas as pd
 
+from app.ontology.schema_introspection import SchemaInspector
 from app.schema.wave_model import MigrationWave, WaveTask
 from app.control.spec_repo import SpecRepository
 from app.ontology.business_schema import OntologyRegistryManager
@@ -112,10 +113,21 @@ class WaveOrchestrator:
 
             # 3. 注入全局参照数据 (Dynamic Reference Injection)
             # 提取下游任务做外键校验 (foreign_key) 或 VALUE_LOOKUP 所需的字典表
-            reference_data = {
-                entity_name: df[df.columns[0]] # 简化处理：通常以第一列为主键，或需按业务指定
-                for entity_name, df in self._global_reference_pool.items()
-            }
+            reference_data = {}
+            for entity_name, pool_item in self._global_reference_pool.items():
+                df = pool_item["dataframe"]
+                pk = pool_item["primary_key"]
+                if pk is None:
+                    # 如果未能发现主键，跳过该实体（或者可以用第一列，但这里我们跳过并警告）
+                    logger.warning(f"Entity '{entity_name}' has no primary key, skipping from reference data.")
+                    continue
+
+                if pool_item["is_composite"]:
+                    # 复合主键：将多列组合为元组 Series
+                    reference_data[entity_name] = df[pk].astype(str).agg(tuple, axis=1)
+                else:
+                    # 单列主键
+                    reference_data[entity_name] = df[pk]
 
             # 4. 移交执行平面 (Execution Plane)
             clean_df, quarantine_df, audit_report, lifecycle = self.pipeline.run_pipeline(
@@ -140,8 +152,15 @@ class WaveOrchestrator:
             else:
                 logger.info(f"✅ TASK SUCCESS: {task.task_id}. Injecting successful data into Global Reference Pool.")
                 # 将成功的数据挂载到全局池，供下游作为主数据参照（比如 Invoice 需要 Customer 的数据做外键校验）
-                entity_name = target_ontology.get("dataset_name", task.domain)
-                self._global_reference_pool[entity_name] = clean_df
+                if not clean_df.empty:
+                    pk_meta = SchemaInspector.discover_primary_keys(clean_df)
+                    entity_name = target_ontology.get("dataset_name", task.domain)
+                    self._global_reference_pool[entity_name] = {
+                        "dataframe": clean_df,
+                        "primary_key": pk_meta["primary_key"],
+                        "is_composite": pk_meta["is_composite"]
+                    }
+                    logger.info(f"Injected entity '{entity_name}' into reference pool with primary key: {pk_meta['primary_key']}")
                 
                 wave_report["tasks_executed"].append({
                     "task_id": task.task_id, "status": "SUCCESS", "records_committed": len(clean_df)

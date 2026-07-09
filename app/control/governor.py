@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from app.schema.ir_model import MappingSpec, AdvancedTransformationIR
 from app.control.spec_repo import SpecRepository
@@ -94,3 +94,24 @@ class SpecGovernor:
         self.repo.save(spec)
         logger.info(f"Spec {spec_id} rejected. Reverted to DRAFT.")
         return spec
+    
+    def diff_specs(self, spec_id1: str, spec_id2: str) -> Dict[str, Any]:
+        spec1 = self.repo.get_by_id(spec_id1)
+        spec2 = self.repo.get_by_id(spec_id2)
+        if not spec1 or not spec2:
+            raise ValueError("One or both specs not found.")
+        # 简单比较 IR 节点和输出映射
+        diff = {}
+        # 比较 intermediate_steps 的 keys
+        keys1 = set(spec1.ir_graph.intermediate_steps.keys())
+        keys2 = set(spec2.ir_graph.intermediate_steps.keys())
+        diff['steps_added'] = list(keys2 - keys1)
+        diff['steps_removed'] = list(keys1 - keys2)
+        diff['steps_common'] = list(keys1 & keys2)
+        # 可以进一步比较节点操作和选项
+        # 比较 output_mappings
+        out1 = set(spec1.ir_graph.output_mappings.keys())
+        out2 = set(spec2.ir_graph.output_mappings.keys())
+        diff['outputs_added'] = list(out2 - out1)
+        diff['outputs_removed'] = list(out1 - out2)
+        return diff
