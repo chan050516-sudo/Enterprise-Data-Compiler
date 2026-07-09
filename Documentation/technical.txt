@@ -79,6 +79,7 @@ python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_
 
 ---
 
+[DONE]
 ## 8. **缺少“回滚策略”的可视化**（操作缺口）
 - **现状**：Saga冲销逻辑存在，但无界面展示冲销记录。
 - **真实场景**：审计人员需要查看冲销凭证。
@@ -95,6 +96,7 @@ python tests/run_robustness_benchmark.py --ontology-file app/ontology/canonical_
 
 ---
 
+[DONE]
 ## 10. **缺少“映射历史版本对比”功能**（治理缺口）
 - **现状**：`SpecRepository`可存储多版本，但无对比。
 - **真实场景**：需展示变更影响范围。

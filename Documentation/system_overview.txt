@@ -1,0 +1,168 @@
+## 系统架构全景解读
+
+Date: 9/7/2026
+
+这是一个**自主企业数据编译器（Autonomous Enterprise Data Compiler）**，专为 ERP 迁移、数据湖集成等场景设计，旨在将异构数据源（如 CSV）根据业务本体（Ontology）和经审批的映射规格（MappingSpec）自动编译成目标系统可用的数据，并内置质量评估、事务补偿、人工复核和宏观编排等企业级能力。
+
+---
+
+### 1. 总体分层架构（由下至上）
+
+| 层级 | 名称 | 核心模块/职责 |
+|------|------|--------------|
+| **Layer 1** | 数据源连接器 | `connectors/`：读取源文件（CSV）为 pandas DataFrame |
+| **Layer 2** | 语义分析器 | `SemanticProfiler`：从源数据提取字段指纹、类型、相关性，生成源 Schema |
+| **Layer 3** | 本体与契约注册中心 | `OntologyRegistryManager` + `MappingRegistryEngine`：加载目标业务本体（ODCS 契约、字段定义、关系）和历史映射经验 |
+| **Layer 4** | 语义映射器（LLM） | `SemanticMapper`：基于源 Schema、目标本体、历史提示，调用 Gemini 生成**中间表示（IR）**，并封装为 `MappingSpec`（初始为 DRAFT） |
+| **控制平面** | 规格治理与持久化 | `SpecGovernor` + `SpecRepository`：管理 `MappingSpec` 的生命周期（DRAFT → PENDING_APPROVAL → LOCKED → ARCHIVED），提供唯一 `LOCKED` 规格给执行平面 |
+| **Layer 5** | IR 校验与信任评估 | `IRValidator`（DAG 校验、算子参数检查）+ `DataTrustEngine`（行级/数据集级契约检查，生成 `TrustAuditReport`） |
+| **Layer 6** | 确定性 IR 编译器 | `IRCompiler`：按拓扑顺序执行 IR 节点（算子注册表），将源 DataFrame 编译为目标 DataFrame |
+| **Layer 7** | 业务对账与 Saga 补偿 | `ReconciliationEngine`（时间容忍、复式记账、汇总一致性等）+ `SagaManager`（DB 写入失败时生成冲销数据） |
+| **Layer 8** | 输出持久化 | `SQLiteWriter`（目标库原子写入）+ `SecondaryExporter`（CSV 快照导出） |
+| **Layer 9** | 宏观波次编排 | `WaveOrchestrator`：管理多业务对象的依赖 DAG，按序执行多个迁移任务，维护全局参考数据池 |
+
+---
+
+### 2. 核心类关系（依赖与协作）
+
+#### 2.1 数据实体（Schema 层）
+- **`MappingSpec`**：核心契约对象，包含 `domain`、`version`、`status`、`ir_graph`（`AdvancedTransformationIR`）、`global_constants`、审计字段。
+- **`AdvancedTransformationIR`**：包含 `intermediate_steps`（`Dict[str, IRNode]`）和 `output_mappings`（`Dict[str, IRNode]`）。
+- **`IRNode`**：单个算子节点，含 `operation`（算子名）、`inputs`（`List[IRArgument]`）、`options`、`target_type`。
+- **`IRArgument`**：类型为 `COLUMN_REF`、`STEP_REF`、`LITERAL`、`TABLE_REF`，携带值。
+
+#### 2.2 控制平面（Control Plane）
+- **`SpecRepository`**：SQLite 持久化，提供 `save`、`get_by_id`、`get_active_locked_spec(domain)` 和原子 `promote_to_locked`（归档同域旧版）。
+- **`SpecGovernor`**：封装状态机，方法：
+  - `propose_new_spec`（AI 调用，创建 DRAFT）
+  - `submit_for_approval`（DRAFT → PENDING_APPROVAL）
+  - `approve_and_lock`（→ LOCKED，同时归档同域其他 LOCKED）
+  - `reject`（→ DRAFT）
+  - `diff_specs`（比较两个规格）
+
+#### 2.3 执行平面（Execution Plane）
+- **`PipelineOrchestrator`**：总控制器，`run_pipeline` 按序调用：
+  1. `IRValidator.validate_topology`
+  2. `IRCompiler.compile`
+  3. `DataTrustEngine.evaluate`
+  4. `ReconciliationEngine.perform_reconciliation`
+  5. 根据 `TrustAuditReport.routing_decision` 路由：
+     - **PASS** → `SQLiteWriter.commit`（若失败则 `SagaManager.execute_compensation`）
+     - **QUARANTINE** → 可选自动生成补丁 `MappingSpec`（DRAFT）供下次迭代
+- **`IRCompiler`**：维护算子注册表，按拓扑排序执行 `intermediate_steps`，再生成 `output_mappings`，返回 `DataFrame`。
+- **`DataTrustEngine`**：执行行级/数据集级/全局不变量检查，输出 `TrustAuditReport`（含 `quarantine_indices`、`trust_score`、`routing_decision`）。
+- **`ReconciliationEngine`**：补充业务对账（日期容忍、复式记账、行汇总、递归汇总、外键存在性），追加隔离行。
+- **`SagaManager`**：利用 `InverseCompiler` 生成冲销 DataFrame，通过 `SQLiteWriter.fallback_commit_reversal` 写入补偿数据。
+- **`BatchLifecycle`**：状态机记录批次状态（INIT → COMPILED → RECONCILED → COMMITTING → COMMITTED/QUARANTINED/COMPENSATING）。
+
+#### 2.4 本体与映射辅助
+- **`OntologyRegistryManager`**：加载 `ontology_registry.json`，合并 `canonical_ontology.json`，提供 `get_ontology(name)` 返回完整字段、ODCS 契约、关系等。
+- **`MappingRegistryEngine`**：基于 `mapping_registry.json`，提供模糊匹配的历史映射召回（供 LLM 作为提示）。
+- **`SemanticProfiler`**：分析源 DataFrame，生成源 Schema（含字段类型、空值率、样本、推断语义、相关性公式）。
+- **`SemanticMapper`**：使用 `GeminiClient` 生成 IR，包装为 `MappingSpec`（DRAFT）。
+
+#### 2.5 宏观编排
+- **`WaveOrchestrator`**：接收 `MigrationWave`（含多个 `WaveTask`），按拓扑排序执行每个任务，每个任务调用 `PipelineOrchestrator`，并将成功数据注入 `_global_reference_pool`，供下游外键校验。
+
+---
+
+### 3. 关键数据流（以一次完整执行为例）
+
+```
+1. 用户运行 main.py（指定 --source CSV, --target-ontology, --domain）
+   └─> 加载环境变量，获取 GEMINI_API_KEY
+
+2. 初始化 Layer 3：
+   └─> OntologyRegistryManager(registry_file) 加载目标本体
+   └─> 同时加载 canonical_ontology 作为标准语义层
+
+3. 连接控制平面：
+   └─> SpecRepository() 查询 get_active_locked_spec(domain)
+       └─> 若不存在 LOCKED 规格，终止；否则获得 active_spec
+
+4. Layer 1 读取源数据：
+   └─> CSVConnector.read_data() -> source_df (DataFrame)
+
+5. 执行平面 PipelineOrchestrator.run_pipeline(source_df, active_spec, target_ontology)：
+   a) IRValidator.validate_topology
+      - 检查 DAG 环路、算子参数完整性、输出字段覆盖、外键关系等
+   b) IRCompiler.compile
+      - 注入 global_constants 作为虚拟列
+      - 按拓扑顺序执行 intermediate_steps（计算中间列）
+      - 执行 output_mappings 生成目标列，应用 fallback 策略（USE_ZERO / DEFAULT_STRING / HALT）
+      - 返回 compiled_df
+   c) DataTrustEngine.evaluate
+      - 逐行检查 row_level_rules（not_null、pattern、unique、foreign_key 等）
+      - 检查 dataset_level_rules（volume_check、sum_alignment）
+      - 检查 global_invariants（double_entry、line_sum_consistency 等）
+      - 生成 TrustAuditReport（含 quarantine_indices、trust_score、routing_decision）
+   d) ReconciliationEngine.perform_reconciliation
+      - 追加检查日期容忍度、复式记账、头行汇总、递归汇总、外键存在性等
+      - 更新 audit_report，可能追加隔离行
+   e) 路由决策：
+      - 若 routing_decision == "PASS" 且无 dataset_errors：
+         └─> SQLiteWriter.commit(clean_df, target_ontology) 写入目标库
+              └─> 若 commit 抛出异常：
+                   └─> SagaManager.execute_compensation(partially_committed_df, spec, ontology)
+                        └─> InverseCompiler.generate_reversal（金额取反、状态标记）
+                        └─> SQLiteWriter.fallback_commit_reversal（写入冲销数据）
+         └─> 返回 clean_df
+      - 若 routing_decision == "QUARANTINE" 或 commit 失败后：
+         └─> 隔离 quarantine_df
+         └─> （可选）自动生成补丁 spec：
+              - 提取失败上下文（错误统计、高频脏样本、启发式特征）
+              - 调用 SemanticMapper.generate_spec (带 hints)
+              - 调用 SpecGovernor.propose_new_spec (DRAFT 版本，parent_spec_id 指向当前 LOCKED)
+         └─> 返回 quarantine_df
+
+6. 结果处理：
+   - PASS: 导出 CSV 快照，写入审计报告 JSON
+   - QUARANTINE: 生成隔离区 Payload（含细胞级错误矩阵）和 Markdown 报告，供人工复核
+```
+
+---
+
+### 4. 关键设计亮点
+
+- **控制/执行分离**：映射规格必须经过审批（LOCKED）才能执行，保证生产环境变更受控。
+- **确定性编译**：IR 图是纯函数式 DAG，编译结果可重现。
+- **多层质量防线**：Layer 5（信任评估）+ Layer 7（业务对账）共同决定数据是否放行，隔离机制防止脏数据污染目标系统。
+- **Saga 补偿**：DB 写入失败时自动生成冲销记录，保障分布式事务最终一致性。
+- **自愈闭环**：隔离批次可自动生成补丁规格（DRAFT），供审批后快速修复。
+- **本体合并**：支持 `canonical_ontology` 作为语义标准，与具体 ERP 本体合并，实现一次映射、多目标适配。
+- **宏观编排**：`WaveOrchestrator` 支持多对象依赖和级联熔断，适合大型迁移项目。
+- **审计追踪**：每个批次保留 `ExecutionTrace`，含编译步骤、信任评估、对账违规、Saga 操作等，可导出 JSON 供分析。
+
+---
+
+### 5. 扩展性说明
+
+- **算子可扩展**：`IRCompiler` 采用注册表模式，新增算子只需实现函数并添加到 `_operator_registry`。
+- **规则可扩展**：`DataTrustEngine` 的 `_row_rule_registry` 支持添加新的断言类型。
+- **连接器可扩展**：继承 `BaseConnector` 实现新数据源（如 Excel、数据库）。
+- **目标数据库可扩展**：`SQLiteWriter` 可替换为其他 DB 适配器（PostgreSQL、Oracle 等）。
+- **LLM 可替换**：`GeminiClient` 可抽象为通用接口，支持其他模型。
+
+---
+
+### 6. 文件与模块职责速查
+
+| 文件 | 核心职责 |
+|------|----------|
+| `main.py` | CLI 入口，组装各层并执行完整流程 |
+| `settings.py` | 全局配置（路径、LLM 温度、沙箱限制） |
+| `connectors/` | Layer 1 数据读取 |
+| `ontology/` | Layer 3 本体注册表、映射注册表、Schema 检查工具 |
+| `control/` | 控制平面（Governor + Repository） |
+| `schema/` | 数据模型（IR、MappingSpec、Wave、Trace、Profiler） |
+| `llm/` | Layer 4 LLM 客户端、Mapper、提示模板 |
+| `harness/` | Layer 5 校验、信任评估、审计报告 |
+| `execution/` | Layer 6/7 编译器、状态机、对账、Saga、逆编译器、波次编排 |
+| `review/` | 隔离区视图、人工复核引擎 |
+| `output/` | Layer 8 SQLite 写入、CSV 导出 |
+
+---
+
+### 7. 小结
+
+该系统是一个**面向数据迁移与集成的高鲁棒性编译引擎**，将数据映射、质量校验、事务补偿、人工干预和宏观调度整合为统一的管道。其核心是**IR（中间表示）驱动的声明式数据转换**，配合**双层控制（控制平面管理契约，执行平面负责编译）**，实现了企业级数据工作流的自动化与可控性。

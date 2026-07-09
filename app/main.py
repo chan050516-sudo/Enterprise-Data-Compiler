@@ -134,12 +134,30 @@ def main():
         )
 
         # 6. 🚀 点火：执行核心自治流水线
-        clean_df, quarantine_df, audit_report, lifecycle = orchestrator.run_pipeline(
+        clean_df, quarantine_df, audit_report, lifecycle, trace = orchestrator.run_pipeline(
             source_df=source_df,
             active_spec=active_spec,
             target_ontology=target_ontology,
             reference_data=None
         )
+
+        # 在 PASS 分支和 QUARANTINE 分支中，都将 trace 写入文件
+        trace_file = os.path.join(os.path.dirname(args.csv_out), f"trace_{trace['batch_id']}.json")
+        with open(trace_file, 'w', encoding='utf-8') as f:
+            json.dump(trace, f, indent=2, default=str)  # default=str 处理 datetime
+
+        # 控制台打印摘要
+        logger.info("📊 Execution Trace Summary:")
+        logger.info(f"  Batch ID: {trace['batch_id']}")
+        logger.info(f"  Compilation steps: {len(trace['compilation']['steps'])}")
+        if trace.get('trust_evaluation'):
+            te = trace['trust_evaluation']
+            logger.info(f"  Trust Score: {te['trust_score']:.4f}  Decision: {te['routing_decision']}")
+            logger.info(f"  Quarantined rows: {te['quarantined_rows']} / {te['total_rows']}")
+        if trace.get('saga') and trace['saga']['triggered']:
+            logger.info(f"  ⚠️ Saga Compensation triggered, {trace['saga']['reversal_rows']} reversal records written.")
+        logger.info(f"  Final state: {lifecycle.current_state.value}")
+        logger.info(f"  Trace saved to: {trace_file}")
 
         # 7. 处理最终决议 (The Final Resolution)
         if audit_report.routing_decision == "PASS" and lifecycle.current_state == BatchState.COMMITTED:

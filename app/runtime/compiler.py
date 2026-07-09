@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import difflib
 from typing import Dict, Any, List, Union
+import time
 import logging
 from app.schema.ir_model import AdvancedTransformationIR, IRNode, IRArgument
 
@@ -420,7 +421,13 @@ class IRCompiler:
 
         return sorted_steps
 
-    def compile(self, source_df: pd.DataFrame, ir: AdvancedTransformationIR, target_ontology: Dict[str, Any] = None, global_constants: Dict[str, Any] = None, extra_tables: Dict[str, pd.DataFrame] = None) -> pd.DataFrame:
+    def compile(self, source_df: pd.DataFrame, 
+                ir: AdvancedTransformationIR, 
+                target_ontology: Dict[str, Any] = None, 
+                global_constants: Dict[str, Any] = None, 
+                extra_tables: Dict[str, pd.DataFrame] = None,
+                trace: Dict[str, Any] = None) -> pd.DataFrame:
+        
         logger.info("Initializing Native Compilation & Relational Context...")
         runtime_context: Dict[str, Union[pd.Series, pd.DataFrame]] = {}
         output_df = pd.DataFrame()
@@ -436,6 +443,36 @@ class IRCompiler:
         # 1. Compile and execute calculation steps
         for step_name in execution_order:
             node = ir.intermediate_steps[step_name]
+            # Record time
+            start = time.time()
+            runtime_context[step_name] = self._execute_node(node, source_df, runtime_context, extra_tables)
+            elapsed = (time.time() - start) * 1000  # ms
+            if trace is not None:
+                # 获取输入列（从 inputs 解析）
+                input_cols = []
+                for arg in node.inputs:
+                    if arg.type == "COLUMN_REF":
+                        input_cols.append(arg.value)
+                    elif arg.type == "STEP_REF":
+                        # 如果引用中间步骤，可从该步骤的输出列获取（但我们不深入）
+                        pass
+                # 获取输出列（若是DataFrame则取列名，若是Series则取名称）
+                result = runtime_context[step_name]
+                output_cols = []
+                if isinstance(result, pd.DataFrame):
+                    output_cols = list(result.columns)
+                elif isinstance(result, pd.Series):
+                    output_cols = [result.name] if result.name else []
+                trace["compilation"]["steps"].append({
+                    "step_name": step_name,
+                    "operation": node.operation,
+                    "input_columns": input_cols,
+                    "output_columns": output_cols,
+                    "rows_in": len(source_df),
+                    "rows_out": len(result) if isinstance(result, (pd.DataFrame, pd.Series)) else None,
+                    "execution_time_ms": round(elapsed, 2),
+                    "options": node.options
+                })
             logger.debug(f"Compiling intermediate virtual register: {step_name}")
             runtime_context[step_name] = self._execute_node(node, source_df, runtime_context, extra_tables)
 

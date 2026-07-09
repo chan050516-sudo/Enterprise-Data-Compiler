@@ -17,13 +17,23 @@ class SagaManager:
         self.inverse_compiler = InverseCompiler()
         self.db_writer = db_writer
 
-    def execute_compensation(self, partially_committed_df: pd.DataFrame, spec: MappingSpec, target_ontology: Dict[str, Any]):
+    def execute_compensation(self, partially_committed_df: pd.DataFrame, spec: MappingSpec, target_ontology: Dict[str, Any], trace: Dict[str, Any] = None):
         logger.warning("🛡️ SAGA MANAGER ACTIVATED: Commencing Reversal Transaction...")
         
         try:
             # 1. 生成逆向数据 (红字凭证)
             reversal_df = self.inverse_compiler.generate_reversal(partially_committed_df, spec, target_ontology)
             
+            # 在 trace 中记录
+            if trace is not None:
+                # 将 reversal_df 转为 dict 列表（注意处理 NaN）
+                records = reversal_df.where(pd.notna(reversal_df), None).to_dict(orient='records')
+                trace["saga"] = {
+                    "triggered": True,
+                    "reversal_records": records,
+                    "reversal_rows": len(records)
+                }
+                
             # 2. 将冲销数据打入死信/应急通道写入目标库
             # 这里的 fallback_commit 使用了独立事务或紧急 API 接口
             self.db_writer.fallback_commit_reversal(reversal_df, target_ontology["dataset_name"])

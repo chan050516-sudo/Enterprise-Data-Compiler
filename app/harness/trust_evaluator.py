@@ -40,7 +40,8 @@ class DataTrustEngine:
         compiled_df: pd.DataFrame, 
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
-        base_mapping_confidence: float = 1.0
+        base_mapping_confidence: float = 1.0,
+        trace: Dict[str, Any] = None
     ) -> TrustAuditReport:
         """执行全面信任度评估并返回带有路由决策的报告"""
         
@@ -133,6 +134,17 @@ class DataTrustEngine:
             has_dataset_errors=len(dataset_errors) > 0,
             base_confidence=base_mapping_confidence
         )
+
+        if trace is not None:
+            trace["trust_evaluation"] = {
+                "trust_score": trust_score,
+                "routing_decision": decision,
+                "total_rows": total_rows,
+                "quarantined_rows": len(quarantine_indices),
+                "dataset_errors": dataset_errors,
+                "row_errors": errors,
+                "warnings": warnings
+            }
 
         return self._build_trust_report(
             total_rows, trust_score, decision, quarantine_indices, warnings, errors, dataset_errors
