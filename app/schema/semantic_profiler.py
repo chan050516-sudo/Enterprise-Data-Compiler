@@ -96,6 +96,10 @@ class SemanticProfiler:
             except Exception as e:
                 logger.warning(f"Relationship discovery skipped due to computation error: {e}")
 
+        relationships = cls._compute_column_overlaps(working_df)
+        if relationships:
+            schema["relationships"] = relationships
+
         def _make_json_serializable(obj):
             if isinstance(obj, pd.Timestamp):
                 return obj.isoformat()
@@ -128,3 +132,65 @@ class SemanticProfiler:
             if match_count >= len(sample_texts) * 0.9:
                 return concept
         return ""
+
+    @classmethod
+    def build_dependency_matrix(cls, df: pd.DataFrame, sample_rows: int = 10000) -> Dict[str, Any]:
+        """
+        构建列间依赖矩阵，用于 Chunking 粗分和映射决策。
+        返回结构：
+        {
+            "relationships": [
+                {
+                    "source_column": "cust_no",
+                    "target_column": "id",
+                    "source_entity": "Orders",         # 可选，从列名推断
+                    "target_entity": "Customer",       # 可选，从列名推断
+                    "overlap_ratio": 0.95,
+                    "relationship_type": "fk_candidate",
+                    "confidence": "HIGH"
+                }
+            ]
+        }
+        """
+        # 1. 采样（避免 OOM）
+        if len(df) > sample_rows:
+            working_df = df.sample(n=sample_rows, random_state=42)
+        else:
+            working_df = df
+
+        # 2. 提取所有列的唯一值集合（只对可哈希类型做）
+        col_values = {}
+        for col in working_df.columns:
+            # 跳过浮点数（浮点数不适合做精确 FK 匹配）
+            if pd.api.types.is_float_dtype(working_df[col]):
+                continue
+            valid_series = working_df[col].dropna()
+            if len(valid_series) > 0:
+                # 转为字符串集合，保证可哈希
+                col_values[col] = set(valid_series.astype(str).values)
+
+        # 3. 计算两两重叠率
+        relationships = []
+        col_list = list(col_values.keys())
+
+        for i, col_a in enumerate(col_list):
+            set_a = col_values[col_a]
+            for col_b in col_list[i+1:]:
+                set_b = col_values[col_b]
+                intersection = len(set_a & set_b)
+                if intersection == 0:
+                    continue
+                ratio = intersection / min(len(set_a), len(set_b))
+                rel_type = "fk_candidate" if ratio > 0.8 else "partial_match"
+                confidence = "HIGH" if ratio > 0.95 else "MEDIUM" if ratio > 0.8 else "LOW"
+
+                # 避免重复添加
+                relationships.append({
+                    "source_column": col_a,
+                    "target_column": col_b,
+                    "overlap_ratio": round(ratio, 4),
+                    "relationship_type": rel_type,
+                    "confidence": confidence
+                })
+
+        return {"relationships": relationships}
