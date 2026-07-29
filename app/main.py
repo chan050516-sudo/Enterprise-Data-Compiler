@@ -8,6 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from app.config.settings import settings
+from app.normalizer.technical_normalizer import TechnicalNormalizer
 from app.connectors.csv_connector import CSVConnector
 from app.knowledge.knowledge_base import KnowledgeBase
 from app.schema.semantic_profiler import SemanticProfiler
@@ -82,6 +83,24 @@ def main():
         # 2. 读取源数据
         connector = CSVConnector(source_path=args.source)
         source_df = connector.read_data()
+
+        logger.info("Phase 0.5: Applying Technical Normalization...")
+        normalizer = TechnicalNormalizer(config={
+            "normalize_dates": settings.NORMALIZE_DATES,
+            "normalize_phones": settings.NORMALIZE_PHONES,
+            "normalize_numbers": settings.NORMALIZE_NUMBERS,
+            "normalize_whitespace": settings.NORMALIZE_WHITESPACE,
+            "normalize_unicode": settings.NORMALIZE_UNICODE,
+            "phone_country_code": settings.PHONE_COUNTRY_CODE,
+        })
+        source_df, norm_report = normalizer.normalize(source_df)
+        norm_summary = norm_report.to_summary()
+        logger.info(f"Normalization Summary: {norm_summary['total_conversions']} conversions applied.")
+        # 可选：将 norm_report 写入文件
+        with open("output/normalization_report.json", "w") as f:
+            f.write(norm_report.json(indent=2))
+
+
         source_schema = SchemaInspector.from_dataframe(source_df)
         evidence_pack = SemanticProfiler.build_evidence_pack(source_df)
 

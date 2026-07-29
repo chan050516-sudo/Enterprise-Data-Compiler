@@ -10,6 +10,8 @@ class SemanticProfiler:
     """
     Layer 2: Semantic Profiler
     (Data Sampling, Fingerprint Extraction, Relationship Discovery, Business Concept Inference)
+    注意：输入该 Profiler 的 DataFrame **必须**已经过 TechnicalNormalizer 处理。
+    这将保证 '2025-01-01' 和 '01-01-2025' 在归一化后被视为同一种日期模式。
     """
     
     # Business Semantic Regex Patterns
