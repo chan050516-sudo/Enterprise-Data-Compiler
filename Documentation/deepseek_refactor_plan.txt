@@ -1,0 +1,92 @@
+这个方案非常出色，它将你原本的“LLM驱动的ETL工具”彻底升级为一个**“企业语义编译器（Enterprise Semantic Compiler）”**。其核心洞察在于：**数据迁移的本质不是字段映射，而是企业语义的重建（Enterprise Semantic Reconstruction）**。
+
+经过逐行对比你现有的代码和ChatGPT提出的最终方案，我发现你们的**架构意图高度一致**，但**执行阶段严重错位**。现有代码强在“执行平面（Phase 6 & 7）”，而ChatGPT方案强在“前置语义解析（Phase 1 ~ 5）”。
+
+下面我将做**差距分析（Gap Analysis）**，并给出**具体的重构路线图（Roadmap）**。
+
+---
+
+### 一、 核心差距分析：现有代码 vs. 终极方案
+
+| ChatGPT 阶段 | 现有代码对应模块 | 差距与问题 | 重构优先级 |
+| :--- | :--- | :--- | :--- |
+| **Phase 0-1 (技术规范化)** | `csv_connector` 只做读取 | **缺失**。现有代码直接在 Raw Data 上跑 Profiling，导致 `"012-345"` 和 `"012345"` 被当成两种 Pattern。 | **P0 (立即做)** |
+| **Phase 2 (证据图)** | `semantic_profiler.py` 产出 `evidence_pack` | **半成品**。现有代码产出的是零散的 Dict，而不是带证据权重（Evidence Weight）和边关系（Edge）的图结构（Graph）。没有图，就无法做后续的“联合优化（Joint Optimization）”。 | **P0 (立即做)** |
+| **Phase 3 (解析引擎)** | `compiler.py` 中的 `RESOLVE_ENTITIES` 算子 | **严重错位**。现有代码把实体解析（IBM vs IBM Corp）放在了**执行期（Phase 6）**。这太晚了！导致 LLM 在规划时看到的是脏数据，规划质量极低。解析必须前置到**规划期（Phase 3）**。 | **P0 (立即做)** |
+| **Phase 4 (语义理解/LLM)** | `mapping_planner.py` | **过于激进**。现有代码让 LLM 直接生成 `MappingSpec`（含 IR），跳过了“实体发现”和“关系发现”的中间步骤。LLM 一次性输出太多，容易出错且不可解释。 | **P1 (重构)** |
+| **Phase 5 (规则反馈层)** | `spec_repo.py` | **缺失**。现有只存 MappingSpec，不存“企业级业务规则”（如：凡是 `client_code` 都映射为 `BusinessPartnerID`）。导致每次新项目都是从零推理。 | **P1 (重构)** |
+| **Phase 6-7 (编译/执行)** | `compiler.py`, `orchestrator.py`, `reconciliation.py` | **高度契合，保留**。你的 IRCompiler、DataTrustEngine、Saga、对账引擎，完美契合 Phase 6 和 7。这部分是企业数据编译器的“后端（Backend）”，非常坚固，不需要大改。 | **保留** |
+
+---
+
+### 二、 重构方向与具体实施计划
+
+基于上述差距，重构应遵循**“先建图、后解析、再规划、最后反馈”**的原则。不要试图重写所有代码，而是**在现有代码外围增加新的“语义前端（Semantic Frontend）”**。
+
+#### 1. 新增模块：Technical Normalizer（技术规范化层）
+*   **位置**：新建 `app/normalizer/technical_normalizer.py`
+*   **作用**：在 Profiling 之前介入，仅做**无损格式化**（不合并业务含义）。
+*   **重构动作**：在 `main.py` 的 `connector.read_data()` 之后、`SemanticProfiler.profile()` 之前插入。
+*   **逻辑**：统一日期格式（`pd.to_datetime`）、统一电话格式（正则清洗）、去除首尾空格、统一全角/半角。产出 `Normalized DataFrame`。
+
+#### 2. 重构核心：Evidence Graph（证据图）取代 Evidence Pack
+*   **位置**：新建 `app/evidence/graph.py` 和 `app/evidence/builder.py`
+*   **重构动作**：
+    *   抛弃现有的 `evidence_pack` 字典结构。
+    *   定义 **Node**（列节点、值节点）和 **Edge**（`SIMILAR_TO`, `FK_CANDIDATE`, `CO_OCCUR_WITH`）。
+    *   边必须携带 **证据权重（Weight）**（例如：Name Similarity 0.8, Value Overlap 0.95）。
+*   **优势**：有了图结构，后续的“解析引擎”和“LLM推理”就可以在图上游走，而不是在无序的 JSON 里找数据。
+
+#### 3. 新增独立阶段：Resolution Engine（前置解析引擎）
+*   **位置**：新建 `app/resolution/engine.py`
+*   **这是重构最大的变动**。
+*   **动作**：将 `compiler.py` 中的 `_op_resolve_entities` 和 `_op_fuzzy_map` **彻底移出执行平面**，搬到这里。
+*   **新逻辑**：在 Evidence Graph 构建完成后，立即运行 Resolution Engine。
+    *   **Intra-column**：对 `cust_name` 列做聚类（IBM, IBM Corp -> IBM）。
+    *   **Inter-column**：发现 `cust_name` 和 `client_name` 值高度重叠。
+*   **产出**：更新后的 `Evidence Graph`（此时图中的节点不再是“脏值”，而是“规范值/规范列”）。这将极大提升后续 LLM 的推理准确率。
+
+#### 4. 调整编排逻辑：从 Linear 改为 Iterative Loop（收敛循环）
+*   **位置**：修改 `main.py` 和新建 `app/core/semantic_convergence.py`
+*   **重构动作**：
+    *   抛弃“Phase 1 -> Phase 2 -> Phase 3 -> 结束”的线性思路。
+    *   实现一个 **while 循环**：
+        1. LLM 基于当前图推理出 Entity（IR-2）。
+        2. Resolution Engine 根据新的 Entity 定义重新扫描图（发现之前漏掉的同一实体）。
+        3. 更新图中的节点和边。
+        4. 如果图的变化率（Delta）小于阈值（如 5%），则视为**收敛（Convergence）**，退出循环。
+*   **注意**：你的 `PipelineOrchestrator` 目前是线性的，需要把它拆成“语义收敛器（Semantic Convergence）”和“执行编译器（Execution Compiler）”两部分。
+
+#### 5. 扩充持久层：Rule & Feedback Repository（规则反馈库）
+*   **位置**：新建 `app/control/rule_repo.py`
+*   **重构动作**：
+    *   目前你的 `spec_repo` 存的是 `MappingSpec`（针对特定项目的迁移契约）。
+    *   新建 `rule_repo` 存储 **“企业级语义规则（Enterprise Rules）”**。
+    *   例如：当人类在 Review 阶段纠正了某个错误，不是去改 SQL，而是录入 Rule：`"source_pattern": "client_code" -> "canonical_entity": "BusinessPartner"`。
+    *   在下次运行 `MappingPlanner` 时，这些规则作为**硬约束（Hard Constraints）**注入 Prompt，避免重复犯错。
+
+---
+
+### 三、 新的 IR 管道定义（代码级别落地）
+
+为了配合这个重构，你需要在 `app/schema/` 下明确定义新的 IR 模型，以区分阶段：
+
+| IR 名称 | 对应 Python Class | 产出阶段 | 作用 |
+| :--- | :--- | :--- | :--- |
+| **IR-0** | `ColumnProfileIR` | Technical Normalizer 之后 | 存储纯净的统计信息（Pattern, Null%, Unique%） |
+| **IR-1** | `EvidenceGraphIR` | Evidence Builder 之后 | 存储节点、边、权重（NetworkX 或自定义结构） |
+| **IR-2** | `EnterpriseOntologyIR` | LLM + 收敛循环之后 | 存储实体（Entity）、属性（Attribute）、PK/FK（无厂商绑定） |
+| **IR-3** | `MappingSpec`（你现有的） | Migration Planner 之后 | 存储针对特定 ERP（如 SAP）的可执行 IR 图（你现有的 `AdvancedTransformationIR`） |
+
+**代码调整建议**：你现有的 `ir_model.py` 中的 `AdvancedTransformationIR` 非常适合作为 **IR-3**。你只需新增 `ir_discovery_model.py` 来定义 IR-0, IR-1, IR-2 即可。
+
+---
+
+### 四、 总结：重构的先后顺序（按周划分）
+
+1.  **第一周（地基）**：新建 `TechnicalNormalizer`，重构 `SemanticProfiler` 输出标准化的 **IR-0**。将 `RESOLVE_ENTITIES` 从 Compiler 移至新的 `ResolutionEngine`，并让它基于 IR-0 产出更新后的证据。
+2.  **第二周（图与循环）**：抛弃 `evidence_pack`，构建 **Evidence Graph (IR-1)**。修改 `main.py`，引入“推理 -> 解析 -> 更新图”的收敛循环（先不要接数据库，只做纯内存循环）。
+3.  **第三周（LLM拆分）**：将 `mapping_planner.py` 拆分为 `entity_discoverer.py`（产出 IR-2）和 `migration_planner.py`（消费 IR-2 产出 IR-3）。LLM 不再一次性生成最终 Spec，而是分两步走。
+4.  **第四周（持久化与反馈）**：新建 `RuleRepository`，并将其注入到 `MigrationPlanner` 的 Prompt 中作为 Few-shot Examples。同时修改 `HumanReviewEngine`，让人类的修正能自动写入 RuleRepository。
+
+**最终结论**：你的现有代码提供了极其坚固的**执行后端（Backend）**，而 ChatGPT 的方案提供了清晰的**语义前端（Frontend）**。重构的核心就是将“解析（Resolution）”和“收敛（Convergence）”从执行后端剥离，形成独立的前置语义层。这样改造后，你的 EDC 将真正具备“越用越懂企业数据”的能力。

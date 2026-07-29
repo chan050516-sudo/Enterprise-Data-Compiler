@@ -1,0 +1,1737 @@
+（一）
+
+可以。而且经过这几轮讨论，我觉得整个项目已经和你最初的版本有了本质区别。
+
+我不会再称它是一个 **LLM Mapping Tool**，而是一个真正的 **Enterprise Data Compiler (EDC)**。
+
+它的目标不应该是：
+
+> **Legacy Data → Target ERP**
+
+而应该是：
+
+> **Legacy Data → Enterprise Knowledge → Executable Migration**
+
+也就是说，Migration 只是 Compiler 的一个 Backend。
+
+---
+
+# 整体架构
+
+```text
+                           Enterprise Data Compiler
+
+                          ┌──────────────────────┐
+                          │  Project Definition  │
+                          └──────────┬───────────┘
+                                     │
+                                     ▼
+                     Phase 1  Data Discovery & Profiling
+                                     │
+                                     ▼
+                      Phase 2  Evidence Graph Construction
+                                     │
+                                     ▼
+                      Phase 3  Semantic Understanding
+                                     │
+                                     ▼
+                     Phase 4  Canonical Ontology / ERD
+                                     │
+                                     ▼
+                    Phase 5  Migration Planning (IR)
+                                     │
+                                     ▼
+                   Phase 6  Deterministic Compilation
+                                     │
+                                     ▼
+                    Phase 7  Validation & Verification
+                                     │
+                                     ▼
+                             Target ERP Database
+```
+
+下面逐层讲。
+
+---
+
+# Phase 0：Project Definition
+
+输入：
+
+```
+CSV
+Excel
+SQL Database
+JSON
+XML
+```
+
+用户选择：
+
+```
+Target ERP:
+
+SAP
+
+Oracle
+
+AutoCount
+
+Dynamics
+```
+
+可选：
+
+```
+Industry:
+
+Manufacturing
+
+Retail
+
+Finance
+
+Healthcare
+```
+
+这一步**不要开始 Mapping**。
+
+只是建立：
+
+```
+Migration Project
+```
+
+---
+
+# Phase 1：Data Discovery & Profiling
+
+目标：
+
+回答：
+
+> "企业到底给了我什么数据？"
+
+这里不要考虑 SAP。
+
+不要考虑 Canonical Model。
+
+只观察事实（Facts）。
+
+---
+
+## Step 1：Connector
+
+读取：
+
+```
+CSV
+
+Excel
+
+SQL
+
+API
+```
+
+得到：
+
+Raw Dataset。
+
+---
+
+## Step 2：Dataset Flattening
+
+这里是我们后来修正的地方。
+
+不要相信：
+
+```
+Customer Table
+```
+
+真的就是：
+
+Customer。
+
+所以：
+
+把所有 Source：
+
+```
+Excel
+
+CSV
+
+Database
+```
+
+全部拆成：
+
+```
+Column Pool
+```
+
+例如：
+
+```
+cust_name
+
+client_name
+
+buyer
+
+contact
+```
+
+全部进入统一池。
+
+但是：
+
+保留：
+
+```
+belongs_to_dataset
+
+belongs_to_table
+```
+
+作为弱证据。
+
+---
+
+## Step 3：Column Profiling
+
+这里完全 deterministic。
+
+对于每一个 Column：
+
+统计：
+
+### Statistics
+
+```
+count
+
+null ratio
+
+unique ratio
+
+duplicate ratio
+
+min
+
+max
+
+length
+
+datatype
+```
+
+---
+
+### Pattern
+
+例如：
+
+```
+Phone
+
+Email
+
+Date
+
+Currency
+
+Integer
+
+Boolean
+```
+
+---
+
+### Sample Values
+
+例如：
+
+```
+ABC Sdn Bhd
+
+XYZ Enterprise
+
+CU001
+```
+
+---
+
+### Distribution
+
+例如：
+
+```
+Top Frequency
+
+Histogram
+
+Percentile
+```
+
+---
+
+### Candidate Datatype
+
+例如：
+
+```
+String
+
+Integer
+
+Float
+
+Date
+
+Currency
+
+Code
+```
+
+---
+
+### Technical Normalization
+
+这里只做：
+
+不会改变业务含义。
+
+例如：
+
+```
+Phone format
+
+Date format
+
+Currency format
+
+Whitespace
+
+Uppercase
+```
+
+不要：
+
+```
+Fuzzy Merge
+
+Typo Correction
+
+Duplicate Removal
+```
+
+因为：
+
+还不知道是不是同一个 Entity。
+
+---
+
+输出：
+
+## IR-0
+
+```
+Column Profile IR
+```
+
+例如：
+
+```json
+{
+column:"cust_name",
+
+datatype:"string",
+
+unique_ratio:0.98,
+
+pattern:"company name",
+
+sample:[
+"ABC",
+"XYZ"
+]
+}
+```
+
+---
+
+# Phase 2：Evidence Graph Construction
+
+这是整个系统最核心的新部分。
+
+不是：
+
+Knowledge Graph。
+
+而是：
+
+Evidence Graph。
+
+里面保存：
+
+> "为什么我认为两个 Column 有关系？"
+
+---
+
+## Node
+
+每一个 Column：
+
+都是 Node。
+
+Node 保存：
+
+```
+Statistics
+
+Pattern
+
+Embedding
+
+Samples
+
+Semantic Features
+```
+
+例如：
+
+```
+cust_name
+```
+
+Node：
+
+```
+datatype
+
+statistics
+
+embedding
+
+profile
+```
+
+---
+
+## Edge
+
+Edge 不是：
+
+```
+similar_to
+```
+
+而是：
+
+```
+relationship
+
++
+
+evidence
+```
+
+例如：
+
+```json
+{
+edge:
+
+possible_fk,
+
+confidence:
+0.94,
+
+evidence:{
+
+value_overlap:0.98,
+
+name_similarity:0.83,
+
+cardinality:"many_to_one",
+
+embedding:0.91
+}
+}
+```
+
+---
+
+Edge 类型：
+
+```
+belongs_to_dataset
+
+belongs_to_table
+
+similar_to
+
+possible_fk
+
+same_attribute
+
+derived_from
+
+co_occurs
+```
+
+注意：
+
+目前：
+
+还没有：
+
+Entity。
+
+---
+
+## Evidence Generator
+
+这里全部 deterministic。
+
+例如：
+
+Name Similarity：
+
+```
+customer_name
+
+client_name
+```
+
+---
+
+Embedding Similarity：
+
+```
+customer
+
+buyer
+```
+
+---
+
+Value Overlap：
+
+```
+customer_id
+
+invoice.customer_id
+```
+
+---
+
+Cardinality：
+
+发现：
+
+```
+1:N
+
+N:1
+
+1:1
+```
+
+---
+
+Co-occurrence：
+
+例如：
+
+```
+phone
+
+address
+
+zip
+```
+
+经常一起出现。
+
+---
+
+输出：
+
+## IR-1
+
+Evidence Graph IR。
+
+---
+
+# Phase 3：Semantic Understanding
+
+这是第一次调用 LLM。
+
+但是：
+
+LLM 不看 Raw Data。
+
+只看：
+
+Evidence。
+
+输入：
+
+```
+IR-0
+
++
+
+IR-1
+```
+
+---
+
+## Step 1：Column Semantic Analyzer
+
+例如：
+
+```
+cust_name
+```
+
+LLM：
+
+输出：
+
+```
+Customer Name
+
+confidence=0.94
+```
+
+不是：
+
+Mapping。
+
+只是：
+
+Attribute。
+
+例如：
+
+```
+Customer Name
+
+Invoice Date
+
+Phone
+
+Address
+
+Quantity
+```
+
+更新：
+
+Evidence Graph。
+
+---
+
+## Step 2：Attribute Clustering
+
+例如：
+
+```
+cust_name
+
+client_name
+
+customer
+```
+
+聚类：
+
+```
+Customer Name
+```
+
+---
+
+## Step 3：Entity Discovery
+
+LLM：
+
+根据：
+
+Attribute Cluster。
+
+推断：
+
+```
+Customer
+
+Product
+
+Invoice
+
+Supplier
+
+Employee
+```
+
+例如：
+
+```
+Customer
+
+Attributes:
+
+ID
+
+Name
+
+Phone
+
+Address
+```
+
+---
+
+## Step 4：Relationship Discovery
+
+这里：
+
+LLM：
+
+结合：
+
+Evidence Graph。
+
+例如：
+
+```
+Customer
+
+↓
+
+Order
+```
+
+发现：
+
+```
+1:N
+```
+
+或者：
+
+```
+Invoice
+
+↓
+
+Product
+
+N:M
+```
+
+这里：
+
+PK/FK：
+
+才真正确定。
+
+不是：
+
+Phase 1。
+
+---
+
+输出：
+
+## IR-2
+
+Ontology IR。
+
+包括：
+
+```
+Entity
+
+Attribute
+
+Relationship
+
+PK
+
+FK
+```
+
+---
+
+# Phase 4：Canonical Ontology
+
+这里开始：
+
+不再关心：
+
+Legacy。
+
+而是：
+
+Enterprise Reality。
+
+例如：
+
+```
+Customer
+
+Supplier
+
+Invoice
+
+Sales Order
+
+Product
+```
+
+形成：
+
+完整 ERD。
+
+例如：
+
+```
+Customer
+
+customer_id PK
+
+name
+
+phone
+
+--------------------
+
+Invoice
+
+invoice_id PK
+
+customer_id FK
+
+--------------------
+
+Product
+
+product_id PK
+```
+
+这是：
+
+Canonical ERD。
+
+不是：
+
+SAP。
+
+---
+
+# Phase 5：Migration Planning
+
+现在：
+
+才开始考虑：
+
+Target ERP。
+
+例如：
+
+SAP：
+
+```
+Customer
+
+↓
+
+Business Partner
+```
+
+AutoCount：
+
+```
+Customer
+
+↓
+
+Debtor
+```
+
+LLM：
+
+生成：
+
+Migration Plan。
+
+---
+
+输出：
+
+## IR-3
+
+Migration IR。
+
+例如：
+
+```json
+{
+source:
+
+Customer.name,
+
+target:
+
+SAP.BusinessPartner.Name,
+
+operator:
+
+NORMALIZE_NAME
+}
+```
+
+---
+
+# Phase 6：Deterministic Compiler
+
+这里：
+
+完全不用 LLM。
+
+包括：
+
+Operator Registry：
+
+```
+Normalize Phone
+
+Merge Name
+
+Currency Convert
+
+Split Address
+
+Lookup
+```
+
+IR：
+
+解释执行。
+
+得到：
+
+Target Database。
+
+---
+
+# Phase 7：Validation
+
+包括：
+
+### Record Count
+
+```
+100000
+
+↓
+
+100000
+```
+
+---
+
+### FK Integrity
+
+```
+全部 FK 存在
+```
+
+---
+
+### Business Rule
+
+例如：
+
+```
+Invoice Total
+```
+
+迁移前：
+
+RM10 million。
+
+迁移后：
+
+RM10 million。
+
+---
+
+### Confidence Report
+
+输出：
+
+例如：
+
+```
+Customer Entity
+
+96%
+
+Invoice
+
+94%
+
+Supplier
+
+88%
+```
+
+需要：
+
+人工确认。
+
+---
+
+# 整个 Compiler 的 IR
+
+这也是今天讨论下来，我认为最值得保留的设计。
+
+```
+Raw Dataset
+
+↓
+
+IR-0
+Column Profile IR
+
+↓
+
+IR-1
+Evidence Graph IR
+
+↓
+
+IR-2
+Enterprise Ontology IR
+
+↓
+
+IR-3
+Migration IR
+
+↓
+
+Executable Pipeline
+```
+
+---
+
+# 我还想补充一个我认为可以进一步优化的地方（之前我们还没讨论到）
+
+我建议再增加一个**Rule & Feedback Layer**，放在 IR-2 和 IR-3 之间。
+
+原因是企业迁移几乎都会有人工审核。例如：
+
+* LLM 推断 `client_code` 是 `Customer ID`，顾问改成 `Business Partner ID`。
+* 某个 FK 被误判，人工修正。
+* 某个实体被拆分或合并。
+
+这些修正**不要只修改最终 Mapping**，而应该回写成规则，进入一个可复用的知识库：
+
+```text
+Human Review
+      │
+      ▼
+Rule Repository
+      │
+      ▼
+下一次项目优先应用这些规则
+```
+
+这样 EDC 会随着项目越来越"懂企业数据"，而不是每次都从零开始推理。
+
+---
+
+# 最终定位
+
+经过我们这几轮讨论，我认为 EDC 的定位已经可以明确为：
+
+> **一个以多层 Intermediate Representation（IR）为核心、以 Evidence Graph 为推理基础、利用 LLM 完成企业语义重建（Enterprise Semantic Reconstruction），最终编译为可执行 ERP Migration Pipeline 的 Enterprise Data Compiler。**
+
+它不是传统 ETL 工具，也不是简单的 AI Mapping 工具，而是把**数据事实（Facts）→ 证据（Evidence）→ 业务语义（Semantics）→ 迁移执行（Execution）**明确拆分成多个可解释、可审计、可人工介入的编译阶段。这一点，也是我认为它最有研究价值和工程价值的地方。
+
+
+
+
+
+
+
+（二）
+
+我认为这两个点都非常重要，而且实际上暴露了目前架构里还缺少两个独立的阶段。特别是第二点，我觉得应该作为一个完整的子系统，而不是附属于 Data Cleaning。
+
+我会分别分析。
+
+---
+
+# 1. Profiling 前是否需要 Format Resolution？
+
+我的答案是：
+
+> **需要，但只能做 Technical Resolution，不能做 Semantic Resolution。**
+
+这里一定要把两者严格分开，否则后面的推理会被污染。
+
+例如：
+
+## 可以提前做（Technical Resolution）
+
+这些操作不会改变业务含义。
+
+例如：
+
+### 日期统一
+
+```text
+2025/01/01
+2025-01-01
+01-01-2025
+```
+
+↓
+
+```text
+2025-01-01
+```
+
+---
+
+### Phone
+
+```text
+0123456789
+012-3456789
++60 12-3456789
+```
+
+↓
+
+统一成：
+
+```text
++60123456789
+```
+
+---
+
+### Number
+
+```text
+00123
+123
+123.0
+```
+
+↓
+
+统一表示（但保留原始值）。
+
+---
+
+### Trim
+
+```text
+" ABC "
+```
+
+↓
+
+```text
+ABC
+```
+
+---
+
+### Unicode
+
+```text
+ＡＢＣ
+```
+
+↓
+
+```text
+ABC
+```
+
+---
+
+这些不会影响业务语义。
+
+Profiling 反而会更准确。
+
+例如：
+
+原本：
+
+```text
+0123456789
+012-3456789
+```
+
+会被 Profiling 当成：
+
+两个 Pattern。
+
+其实应该是：
+
+一个。
+
+---
+
+## 不应该提前做（Semantic Resolution）
+
+例如：
+
+```text
+IBM
+
+IBM Corp
+
+IBM Corporation
+```
+
+不要现在合并。
+
+因为：
+
+你还不知道：
+
+是不是：
+
+同一个 Customer。
+
+---
+
+所以：
+
+我会把：
+
+Phase 1：
+
+改成：
+
+```text
+Raw Data
+
+↓
+
+Technical Normalization
+
+↓
+
+Profiling
+```
+
+而不是：
+
+Raw Data
+
+↓
+
+Profiling
+
+---
+
+# 2. Column 内、跨 Column、跨 Entity 的 Resolution
+
+这个其实是我觉得目前架构最大的缺口。
+
+而且：
+
+它不是：
+
+Cleaning。
+
+它叫：
+
+## Entity Resolution（Record Linkage）
+
+这是一个很大的研究领域。
+
+---
+
+其实：
+
+Resolution：
+
+至少分四层。
+
+---
+
+# Layer 1：Intra-column Resolution
+
+同一个 Column。
+
+例如：
+
+Customer Name：
+
+```text
+IBM
+
+IBM.
+
+IBM SDN BHD
+
+IBM Corporation
+```
+
+目标：
+
+发现：
+
+这些：
+
+可能：
+
+同一个。
+
+输出：
+
+```text
+Canonical:
+
+IBM
+```
+
+Confidence：
+
+0.82
+
+不要直接覆盖。
+
+---
+
+# Layer 2：Inter-column Resolution
+
+不同 Column。
+
+例如：
+
+```text
+customer_name
+
+client_name
+
+buyer_name
+```
+
+里面：
+
+都有：
+
+```text
+IBM
+```
+
+发现：
+
+同一个 Business Object。
+
+---
+
+# Layer 3：Cross-table Resolution
+
+例如：
+
+Customer：
+
+```text
+customer.xlsx
+
+IBM
+```
+
+Supplier：
+
+```text
+supplier.xlsx
+
+IBM
+```
+
+有可能：
+
+Supplier：
+
+也是：
+
+Customer。
+
+很多企业：
+
+就是这样。
+
+所以：
+
+需要：
+
+Business Role。
+
+例如：
+
+```text
+Business Party
+
+↓
+
+Customer
+
+Supplier
+```
+
+---
+
+# Layer 4：Cross-Entity Resolution
+
+例如：
+
+Legacy：
+
+```text
+Sales Rep
+```
+
+Target：
+
+SAP：
+
+```text
+Employee
+```
+
+其实：
+
+Sales Rep：
+
+只是：
+
+Employee：
+
+一个 Role。
+
+这种：
+
+属于：
+
+Ontology Resolution。
+
+---
+
+# 我会把它独立出来
+
+目前：
+
+你的架构：
+
+```text
+Profiling
+
+↓
+
+Evidence
+
+↓
+
+LLM
+```
+
+我现在会改成：
+
+```text
+Profiling
+
+↓
+
+Evidence Graph
+
+↓
+
+Resolution Engine
+
+↓
+
+Updated Evidence Graph
+
+↓
+
+Semantic Reasoning
+```
+
+为什么？
+
+因为：
+
+LLM：
+
+看到：
+
+```text
+IBM
+
+IBM Corp
+
+IBM Corporation
+```
+
+如果：
+
+没有 Resolution。
+
+会认为：
+
+三个。
+
+有了：
+
+Resolution：
+
+Evidence：
+
+```text
+Same Value
+
+confidence=0.94
+```
+
+推理：
+
+更稳定。
+
+---
+
+# Resolution Engine 应该怎么做？
+
+我建议：
+
+不是：
+
+LLM。
+
+而是：
+
+Evidence Fusion。
+
+例如：
+
+IBM：
+
+IBM Corporation。
+
+证据：
+
+```text
+String Similarity
+
+Embedding Similarity
+
+Business Dictionary
+
+Address Similarity
+
+Phone Similarity
+
+Tax Number Similarity
+```
+
+综合：
+
+```text
+confidence=0.96
+```
+
+再：
+
+LLM：
+
+决定：
+
+是否：
+
+Canonicalize。
+
+---
+
+# 所以我会重新调整整个 Pipeline
+
+```text
+Raw Dataset
+
+↓
+
+Technical Normalization
+(格式统一)
+
+↓
+
+Column Profiling
+
+↓
+
+Evidence Graph Construction
+
+↓
+
+Resolution Engine
+(Record / Value / Name Resolution)
+
+↓
+
+Evidence Graph Update
+
+↓
+
+LLM Semantic Reasoning
+
+↓
+
+Entity Discovery
+
+↓
+
+Relationship Discovery
+
+↓
+
+Canonical Ontology
+
+↓
+
+Migration Planning
+
+↓
+
+Compilation
+
+↓
+
+Validation
+```
+
+---
+
+# 不过，我还想提出一个我认为更值得深入思考的问题
+
+你目前把 **Resolution** 放在一个阶段，但实际上它会形成一个**循环（Iterative Loop）**。
+
+举个例子：
+
+第一轮：
+
+LLM：
+
+认为：
+
+```text
+IBM
+
+IBM Corp
+```
+
+不是同一个。
+
+后来：
+
+发现：
+
+Tax Number：
+
+一样。
+
+Address：
+
+一样。
+
+Phone：
+
+一样。
+
+于是：
+
+Resolution：
+
+更新。
+
+Evidence：
+
+改变。
+
+Entity：
+
+改变。
+
+ERD：
+
+可能：
+
+也改变。
+
+所以：
+
+整个系统：
+
+其实应该：
+
+不是：
+
+```text
+Phase1
+
+↓
+
+Phase2
+
+↓
+
+Phase3
+```
+
+而是：
+
+```text
+Evidence Graph
+
+↓
+
+Semantic Reasoning
+
+↓
+
+Resolution
+
+↓
+
+Evidence 更新
+
+↓
+
+Semantic Reasoning
+
+↓
+
+...
+
+直到收敛（Convergence）
+```
+
+也就是说，**Entity Discovery、Relationship Discovery 和 Resolution 不应该是一次性的，而应该共同优化（joint optimization）**。这是数据库领域、知识图谱（Knowledge Graph）和 Entity Resolution 系统中比较常见的思路。
+
+如果未来你的 EDC 要做到研究级甚至接近产品级，我认为这会比继续堆更多 LLM Prompt 更值得投入。因为企业数据理解本质上不是一次推理，而是一个不断积累证据、修正假设、直到语义模型稳定的过程。
