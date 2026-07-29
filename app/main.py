@@ -22,6 +22,7 @@ from app.execution.state_machine import BatchLifecycle, BatchState
 from app.harness.ir_validator import IRValidator
 from app.review.quarantine_viewer import QuarantineViewer
 from app.output.exporter import SecondaryExporter
+from app.evidence.builder import EvidenceGraphBuilder
 
 logger = None
 
@@ -101,8 +102,24 @@ def main():
             f.write(norm_report.json(indent=2))
 
 
+        # 新代码 (Phase 1 + Phase 2)
         source_schema = SchemaInspector.from_dataframe(source_df)
-        evidence_pack = SemanticProfiler.build_evidence_pack(source_df)
+
+        # 生成 IR-0: Column Profiles
+        profiles = SemanticProfiler.generate_column_profiles(
+            source_df, 
+            dataset_name=args.target_ontology
+        )
+
+        # 生成 IR-1: Evidence Graph
+        evidence_graph = EvidenceGraphBuilder.build(profiles, source_df)
+
+        # 可选：保存证据图到文件（供人工审查）
+        import json
+        graph_path = os.path.join(os.path.dirname(args.csv_out), "evidence_graph.json")
+        with open(graph_path, "w", encoding="utf-8") as f:
+            f.write(evidence_graph.json(indent=2))
+        logger.info(f"Evidence Graph saved to {graph_path}")
 
         # 3. 控制平面
         spec_repo = SpecRepository()
@@ -121,7 +138,7 @@ def main():
 
                 spec = planner.plan(
                     source_schema=source_schema,
-                    evidence_pack=evidence_pack,
+                    evidence_graph=evidence_graph,
                     canonical_ontology=canonical_ontology,
                     target_ontology=target_ontology,
                     domain=args.domain,

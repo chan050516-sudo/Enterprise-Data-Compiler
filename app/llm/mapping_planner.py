@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.llm.llm_client import GeminiClient
 from app.llm.prompt_templates import MAPPING_PLANNER_SYSTEM, build_mapping_planner_prompt
 from app.schema.ir_model import MappingSpec, AdvancedTransformationIR, MappingMetadata
+from app.schema.evidence_graph_ir import EvidenceGraph
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class MappingPlanner:
     def plan(
         self,
         source_schema: Dict[str, Any],
-        evidence_pack: Dict[str, Any],
+        evidence_graph: EvidenceGraph,
         canonical_ontology: Dict[str, Any],
         target_ontology: Dict[str, Any],
         domain: str,
@@ -37,7 +38,7 @@ class MappingPlanner:
         # 构建用户 Prompt
         user_prompt = build_mapping_planner_prompt(
             source_schema=source_schema,
-            evidence_pack=evidence_pack,
+            evidence_graph=evidence_graph,
             canonical_ontology=canonical_ontology,
             target_ontology=target_ontology,
         )
@@ -73,7 +74,7 @@ class MappingPlanner:
                     reasoning_summary=data.get("reasoning_summary", ""),
                     evidence_chain=data.get("evidence_chain", []),
                     ambiguities=data.get("ambiguities", []),
-                    profiler_summary=evidence_pack,  # 可以将证据包也存一份快照
+                    profiler_summary=evidence_graph,  # 可以将证据包也存一份快照
                     overall_confidence=data.get("overall_confidence", 0.8),
                 ),
                 parent_spec_id=parent_spec_id,

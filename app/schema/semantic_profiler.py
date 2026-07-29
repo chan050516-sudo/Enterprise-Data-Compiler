@@ -2,138 +2,158 @@ import pandas as pd
 import numpy as np
 import re
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from app.schema.profile_ir import ColumnProfileIR
 
 logger = logging.getLogger(__name__)
 
 class SemanticProfiler:
     """
-    Layer 2: Semantic Profiler
-    (Data Sampling, Fingerprint Extraction, Relationship Discovery, Business Concept Inference)
-    注意：输入该 Profiler 的 DataFrame **必须**已经过 TechnicalNormalizer 处理。
-    这将保证 '2025-01-01' 和 '01-01-2025' 在归一化后被视为同一种日期模式。
+    Layer 2: Semantic Profiler (重构版)
+    职责：接收经过 TechnicalNormalizer 处理的数据，生成 IR-0 (ColumnProfileIR) 列表。
+    不再产出松散的 evidence_pack 字典。
     """
     
-    # Business Semantic Regex Patterns
+    # 业务语义正则（保留原有）
     _CONCEPT_PATTERNS = {
         "email": r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$",
         "date_iso": r"^\d{4}-\d{2}-\d{2}$",
         "uuid": r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-        "currency_code": r"^[A-Z]{3}$"   # Such as USD, MYR
+        "phone": r"^\+?\d[\d\s\-()]{7,20}$",
+        "currency_code": r"^[A-Z]{3}$"
     }
 
     @classmethod
-    def profile(cls, df: pd.DataFrame, max_sample_rows: int = 10000) -> Dict[str, Any]:
-        """Analyze, with OOM Safety Mechanism"""
+    def generate_column_profiles(
+        cls, 
+        df: pd.DataFrame, 
+        dataset_name: str = "default",
+        max_sample_rows: int = 10000
+    ) -> List[ColumnProfileIR]:
+        """
+        核心方法：生成 IR-0 列画像列表。
+        采样机制防止 OOM，适用于大型数据集。
+        """
         total_rows = len(df)
-        
-        # 1. Safe Sampling
         if total_rows > max_sample_rows:
-            logger.info(f"Dataset too large ({total_rows} rows). Sampling {max_sample_rows} rows for profiling.")
+            logger.info(f"Profiling sampling {max_sample_rows} rows from {total_rows}")
             working_df = df.sample(n=max_sample_rows, random_state=42)
         else:
             working_df = df
 
-        schema: Dict[str, Any] = {"fields": {}}
-        
-        # 2. Iterate to get fingerprint
+        profiles = []
         for col in working_df.columns:
+            # ===== 升级版统计计算 =====
             series = working_df[col]
             valid_series = series.dropna()
-            
-            field_meta = {
-                "native_type": str(series.dtype),
-                "null_ratio": round(int(series.isna().sum()) / max(1, len(series)), 4),
-                "fingerprint": {}
-            }
-            
-            if not valid_series.empty:
-                # Retrieve 3 typical samples（To solve semantic ambiguity）
-                field_meta["fingerprint"]["top_samples"] = valid_series.value_counts().head(3).index.tolist()
-                
-                # Business Concept Inference
-                concept = cls._infer_business_concept(valid_series)
-                if concept:
-                    field_meta["inferred_semantic_type"] = concept
-            
-            # Numeric type
+            valid_count = len(valid_series)
+            null_count = len(series) - valid_count
+            total_count = len(series)
+
+            # 1. 基础类型判断
             if pd.api.types.is_numeric_dtype(series):
-                field_meta["logical_type"] = "numeric"
-                if not valid_series.empty:
-                    field_meta["fingerprint"]["min"] = float(valid_series.min())
-                    field_meta["fingerprint"]["max"] = float(valid_series.max())
+                data_type = "numeric"
+                # 百分位数
+                percentiles = {}
+                if valid_count > 0:
+                    p25, p50, p75 = valid_series.quantile([0.25, 0.5, 0.75])
+                    percentiles = {"25%": float(p25), "50%": float(p50), "75%": float(p75)}
+                else:
+                    percentiles = None
+                min_val = float(valid_series.min()) if valid_count > 0 else None
+                max_val = float(valid_series.max()) if valid_count > 0 else None
+                mean_val = float(valid_series.mean()) if valid_count > 0 else None
+                std_val = float(valid_series.std()) if valid_count > 0 else None
+                pattern = None
+                avg_len = None
+                max_len = None
             else:
-                field_meta["logical_type"] = "string_or_categorical"
-                if not valid_series.empty:
-                    n_unique = valid_series.nunique()
-                    if n_unique < 50:   # Unique value < 50 considered as Enum (Industrial standard)
-                        field_meta["fingerprint"]["unique_count"] = n_unique
+                data_type = "string_or_categorical"
+                percentiles = None
+                min_val = max_val = mean_val = std_val = None
+                # 文本模式推断
+                if valid_count > 0:
+                    str_series = valid_series.astype(str)
+                    avg_len = float(str_series.str.len().mean())
+                    max_len = int(str_series.str.len().max())
+                    pattern = cls._infer_business_concept(str_series)
+                else:
+                    avg_len = max_len = None
+                    pattern = None
 
-            schema["fields"][col] = field_meta
+            # 2. 唯一值与重复率
+            unique_count = valid_series.nunique() if valid_count > 0 else 0
+            unique_ratio = unique_count / valid_count if valid_count > 0 else 0
+            duplicate_ratio = round(1 - unique_ratio, 4)  # 新增：重复率
 
-        # 3. Relationship Discovery - Covarience calculation
-        numeric_df = working_df.select_dtypes(include=[np.number])
-        if not numeric_df.empty and len(numeric_df.columns) > 1:
-            try:
-                # Pearson Coefficient Matrix between Data Fingerprint
-                corr_matrix = numeric_df.corr().abs()
-                for col in numeric_df.columns:
-                    # Filter to get Correlation > 0.95 list
-                    high_corr = corr_matrix[col].drop(col)
-                    matches = high_corr[high_corr > 0.95]
-                    
-                    if not matches.empty:
-                        related_col = matches.idxmax()
-                        # Formula Inference: multiple (ratio * x) relationship (such as SST, tax, formula relationship)
-                        ratio = (numeric_df[col] / numeric_df[related_col].replace(0, np.nan)).mean()
-                        if np.isnan(ratio):
-                            logger.warning(f"Could not infer ratio between {col} and {related_col}, skipping relationship.")
-                        else:
-                            schema["fields"][col]["relationships"] = [{
-                                "with": related_col,
-                                "type": "linear",
-                                "formula": f"x * {ratio:.4f}",
-                                "confidence": round(float(matches.max()), 4)
-                            }]
-            except Exception as e:
-                logger.warning(f"Relationship discovery skipped due to computation error: {e}")
+            # 3. 高频值 Top 5（分布统计）
+            top_freq = {}
+            if valid_count > 0:
+                value_counts = valid_series.value_counts()
+                for val, cnt in value_counts.head(5).items():
+                    # 将值转为字符串，确保可序列化
+                    top_freq[str(val) if not isinstance(val, (int, float)) else val] = int(cnt)
 
-        relationships = cls._compute_column_overlaps(working_df)
-        if relationships:
-            schema["relationships"] = relationships
-
-        def _make_json_serializable(obj):
-            if isinstance(obj, pd.Timestamp):
-                return obj.isoformat()
-            elif isinstance(obj, (np.int64, np.int32)):
-                return int(obj)
-            elif isinstance(obj, (np.float64, np.float32)):
-                return float(obj)
-            elif isinstance(obj, dict):
-                return {k: _make_json_serializable(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [_make_json_serializable(item) for item in obj]
+            # 4. 候选数据类型推断（新增）
+            candidate_types = []
+            if data_type == "numeric":
+                candidate_types.append("numeric")
+                # 如果列名含 price/amount/total，增加 currency 候选
+                if any(kw in col.lower() for kw in ['amount', 'price', 'total', 'fee', 'cost']):
+                    candidate_types.append("currency")
+                if all(v is not None for v in [min_val, max_val]) and min_val >= 0:
+                    candidate_types.append("non_negative")
             else:
-                return obj
+                candidate_types.append("string")
+                if pattern:
+                    candidate_types.append(pattern)
+                if unique_ratio < 0.05 and valid_count > 10:  # 低基数
+                    candidate_types.append("enum")
+                if avg_len and avg_len < 10 and unique_ratio > 0.9:
+                    candidate_types.append("code")
 
-        schema = _make_json_serializable(schema)
-        return schema
+            # 5. 样本（保留前 5 个非空）
+            samples = valid_series.head(5).tolist() if valid_count > 0 else []
+
+            # 6. 构建 Profile 对象（注入所有新字段）
+            profile = ColumnProfileIR(
+                column_name=col,
+                dataset_name=dataset_name,
+                data_type=data_type,
+                null_ratio=null_count / total_count if total_count > 0 else 1.0,
+                unique_ratio=round(unique_ratio, 4),
+                duplicate_ratio=duplicate_ratio,      # 新增
+                distinct_count=unique_count,
+                total_count=total_count,
+                min=min_val,
+                max=max_val,
+                mean=mean_val,
+                std=std_val,
+                percentiles=percentiles,               # 新增
+                pattern=pattern,
+                avg_length=avg_len,
+                max_length=max_len,
+                top_frequencies=top_freq,              # 新增
+                samples=samples,
+                candidate_types=candidate_types,       # 新增
+                _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
+            )
+            profiles.append(profile)
+        
+        logger.info(f"Generated {len(profiles)} column profiles.")
+        return profiles
 
     @classmethod
-    def _infer_business_concept(cls, valid_series: pd.Series) -> str:
-        """Make business inference based on Regex (Confidence level > 90%)
-        for formatted value such as UUID, serial no."""
-        if not pd.api.types.is_string_dtype(valid_series) and not pd.api.types.is_object_dtype(valid_series):
-            return ""
-            
-        sample_texts = valid_series.astype(str).head(100)
-        
+    def _infer_business_concept(cls, series: pd.Series) -> Optional[str]:
+        """从样本中推断业务概念（保留原有逻辑）"""
+        if series.empty:
+            return None
+        sample_texts = series.head(100).astype(str)
         for concept, pattern in cls._CONCEPT_PATTERNS.items():
             match_count = sample_texts.str.match(pattern).sum()
-            # Threshold：90 match format out of 100 samples
             if match_count >= len(sample_texts) * 0.9:
                 return concept
-        return ""
+        return None
 
     @classmethod
     def build_dependency_matrix(cls, df: pd.DataFrame, sample_rows: int = 10000) -> Dict[str, Any]:
@@ -196,3 +216,19 @@ class SemanticProfiler:
                 })
 
         return {"relationships": relationships}
+    
+    @classmethod
+    def build_evidence_pack(cls, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        [Deprecated] 保留此方法以兼容旧版 main.py。
+        内部转调 generate_column_profiles 并转换为旧字典格式。
+        建议尽快切换到 EvidenceGraph。
+        """
+        logger.warning("build_evidence_pack is deprecated. Use generate_column_profiles + EvidenceGraphBuilder.")
+        profiles = cls.generate_column_profiles(df)
+        # 构建旧的 evidence_pack 结构（仅为了不报错）
+        return {
+            "profiles": [p.dict() for p in profiles],
+            "columns": [p.column_name for p in profiles],
+            "total_rows": len(df)
+        }

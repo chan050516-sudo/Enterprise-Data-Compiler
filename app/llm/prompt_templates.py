@@ -1,5 +1,6 @@
 import json
 from typing import Dict, Any, Optional, List
+from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
 
 # ==========================================
 # 新的统一 Mapping Planner Prompt (替代旧版)
@@ -69,19 +70,38 @@ Now produce the MappingSpec JSON.
 
 def build_mapping_planner_prompt(
     source_schema: Dict[str, Any],
-    evidence_pack: Dict[str, Any],
+    evidence_graph: EvidenceGraph,
     canonical_ontology: Dict[str, Any],
     target_ontology: Dict[str, Any],
 ) -> str:
     """构建用户 Prompt（包含源 Schema、证据包、规范本体、目标本体）"""
+
+   # 提取高置信度的 FK 候选和相似列
+    fk_hints = []
+    attr_hints = []
+    for edge in sorted(evidence_graph.edges, key=lambda x: -x.weight)[:15]:
+        if edge.edge_type == EdgeType.POSSIBLE_FK and edge.weight > 0.7:
+            fk_hints.append(
+                f"- {edge.source_column} may reference {edge.target_column} "
+                f"(overlap: {edge.evidence.value_overlap:.2f})"
+            )
+        elif edge.edge_type == EdgeType.SAME_ATTRIBUTE and edge.weight > 0.8:
+            attr_hints.append(
+                f"- {edge.source_column} is semantically similar to {edge.target_column}"
+            )
+
     prompt_parts = [
         "Please plan a complete mapping from the source schema to the target ontology.",
         "",
         "## Source Schema (Structure + Constraints)",
         json.dumps(source_schema, indent=2, default=str),
         "",
-        "## Source Evidence Pack (Samples, Frequencies, Patterns)",
-        json.dumps(evidence_pack, indent=2, default=str),
+        "## Evidence Graph (IR-1) - Key Relationships Detected",
+        "### Foreign Key Candidates (High Confidence):",
+        "\n".join(fk_hints) if fk_hints else "None detected.",
+        "",
+        "### Same Attribute Candidates (High Confidence):",
+        "\n".join(attr_hints) if attr_hints else "None detected.",
         "",
         "## Canonical Ontology (Standard Semantic Concepts)",
         json.dumps(canonical_ontology, indent=2, default=str),
@@ -92,6 +112,6 @@ def build_mapping_planner_prompt(
         "## Output Instructions",
         "Return a JSON object with fields: 'reasoning_summary', 'evidence_chain', 'ir_graph'.",
         "Ensure the IR graph uses only the allowed operators and forms a valid DAG.",
-        "Include evidence for each important mapping decision."
+        "Use the evidence graph hints to disambiguate columns."
     ]
     return "\n".join(prompt_parts)
