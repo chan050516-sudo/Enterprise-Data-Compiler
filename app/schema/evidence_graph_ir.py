@@ -8,18 +8,30 @@ class EdgeType(str, Enum):
     SIMILAR_TO = "similar_to"
     POSSIBLE_FK = "possible_fk"
     SAME_ATTRIBUTE = "same_attribute"
-    DERIVED_FROM = "derived_from"          
+    # DERIVED_FROM = "derived_from"
     CO_OCCURS_WITH = "co_occurs_with"
 
 class EvidenceDetail(BaseModel):
-    """支撑一条边的多重证据（增强版）"""
-    name_similarity: Optional[float] = None          # 列名相似度
-    value_overlap: Optional[float] = None            # 值重叠率（min重叠）
-    cardinality: Optional[str] = None                # 'one_to_one', 'one_to_many', 'many_to_one'
-    co_occurrence_score: Optional[float] = None      # 共现得分
-    embedding_similarity: Optional[float] = None     # 向量相似度（预留）
-    partition_similarity: Optional[float] = None     # 新增：分区签名相似度
-    inclusion_degree: Optional[float] = None         # 新增：包含依赖度（用于FK）
+    """支撑一条边的多重证据（完整版）"""
+    # ---------- 语义层面 ----------
+    name_similarity: Optional[float] = None              # 列名编辑距离/向量相似度
+    embedding_similarity: Optional[float] = None         # 词向量/LLM嵌入相似度
+    
+    # ---------- 结构层面 ----------
+    partition_similarity: Optional[float] = None         # 等价类分区一致性（FD强度）
+    value_overlap: Optional[float] = None                # 值集合重叠率 (Jaccard)
+    inclusion_degree: Optional[float] = None             # 包含依赖度 (IND, 用于FK)
+    distribution_similarity: Optional[float] = None      # 分布相似度 (KL/KS/分位数)
+    null_pattern_similarity: Optional[float] = None      # 空值对齐度 (Null Co-occurrence)
+    
+    # ---------- 元数据层面 ----------
+    cardinality: Optional[str] = None                    # 'one_to_one', 'one_to_many', 'many_to_one'
+    datatype_compatibility: Optional[float] = None       # 数据类型兼容性 (numeric~numeric=1, string~string=1)
+    co_occurrence_score: Optional[float] = None          # 同表/同数据集共现强度
+
+    # ---------- 未来扩展：Sketch 近似（占位） ----------
+    minhash_similarity: Optional[float] = None           # MinHash 近似 Jaccard
+    hll_cardinality_ratio: Optional[float] = None        # HyperLogLog 基数比
 
 class GraphEdge(BaseModel):
     source_column: str
@@ -30,7 +42,7 @@ class GraphEdge(BaseModel):
 
 class GraphNode(BaseModel):
     column_name: str
-    properties: Dict[str, Any] = Field(default_factory=dict)  # 嵌入 ColumnProfileIR 的统计信息
+    properties: Dict[str, Any] = Field(default_factory=dict)
 
 class EvidenceGraph(BaseModel):
     nodes: List[GraphNode]
@@ -51,21 +63,32 @@ class EvidenceGraph(BaseModel):
         lines.append(f"Total Columns: {len(self.nodes)}")
         lines.append(f"Total Relationships: {len(self.edges)}")
         
-        # 列出高 PK 评分的列（主键候选）
+        # 列出高 PK 评分列
         pk_scores = [(n.column_name, n.properties.get("pk_score", 0)) for n in self.nodes]
         pk_scores.sort(key=lambda x: -x[1])
         top_pk = [f"{col} ({score:.2f})" for col, score in pk_scores[:5]]
         lines.append(f"\n### Top Primary Key Candidates:\n- " + "\n- ".join(top_pk))
         
+        # 列内结构特征摘要（熵、基数）
+        entropy_cols = []
+        for n in sorted(self.nodes, key=lambda x: -x.properties.get("entropy", 0))[:3]:
+            entropy_cols.append(f"{n.column_name} (entropy={n.properties.get('entropy', 0):.2f})")
+        if entropy_cols:
+            lines.append(f"\n### High Entropy Columns (complex identifiers):\n- " + "\n- ".join(entropy_cols))
+        
         lines.append("\n### High-Confidence Relationships (weight > 0.8):")
         for edge in sorted(self.edges, key=lambda x: -x.weight)[:top_k]:
             detail = []
-            if edge.evidence.partition_similarity:
+            if edge.evidence.partition_similarity is not None:
                 detail.append(f"partition={edge.evidence.partition_similarity:.2f}")
-            if edge.evidence.inclusion_degree:
+            if edge.evidence.inclusion_degree is not None:
                 detail.append(f"inclusion={edge.evidence.inclusion_degree:.2f}")
-            if edge.evidence.value_overlap:
+            if edge.evidence.value_overlap is not None:
                 detail.append(f"overlap={edge.evidence.value_overlap:.2f}")
+            if edge.evidence.null_pattern_similarity is not None:
+                detail.append(f"null_align={edge.evidence.null_pattern_similarity:.2f}")
+            if edge.evidence.distribution_similarity is not None:
+                detail.append(f"dist={edge.evidence.distribution_similarity:.2f}")
             detail_str = f" ({', '.join(detail)})" if detail else ""
             lines.append(
                 f"- {edge.source_column} --[{edge.edge_type.value}]--> {edge.target_column} "
