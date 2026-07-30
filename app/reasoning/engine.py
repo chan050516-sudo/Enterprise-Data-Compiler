@@ -5,6 +5,7 @@ from typing import List, Dict, Set, Optional, Any
 from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope
 from app.schema.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisStatus, HypothesisType
+from app.reasoning.evidence_fusion import EvidenceFusion
 from app.schema.constraint import ConstraintViolation
 from app.reasoning.likelihood import LikelihoodProvider, RuleBasedLikelihoodProvider, softmax
 from app.reasoning.constraint_engine import ConstraintEngine
@@ -34,7 +35,11 @@ class ReasoningEngine:
         self.constraint_evidence: List[Evidence] = []
         self._log_prior = 0.0  # 默认先验对数
     
-    def reason(self, graph: EvidenceGraph) -> HypothesisPool:
+    def reason(self,
+        graph: EvidenceGraph,
+        initial_pool: Optional[HypothesisPool] = None,
+        additional_evidences: Optional[List[Evidence]] = None
+    ) -> HypothesisPool:
         """主入口：执行迭代推理"""
         logger.info("=" * 60)
         logger.info("Reasoning Engine V4.1: Log-Probability Inference")
@@ -43,9 +48,23 @@ class ReasoningEngine:
         # 1. 提取证据（带绑定）
         self.raw_evidence = self._extract_scoped_evidence(graph)
         evidence_pool = self.raw_evidence.copy()
+
+        # 注入额外证据（如语义证据）
+        if additional_evidences:
+            logger.info(f"Injecting {len(additional_evidences)} additional evidences")
+            for ev in additional_evidences:
+                # 对语义证据进行校准
+                if ev.type == EvidenceType.SEMANTIC_INTERPRETATION:
+                    ev = EvidenceFusion.calibrate_llm_evidence(ev)
+                evidence_pool.append(ev)
         
         # 2. 生成初始假设
-        pool = self._generate_initial_hypotheses(graph)
+        if initial_pool:
+            pool = initial_pool
+            logger.info(f"Using provided initial pool with {len(pool.hypotheses)} hypotheses")
+        else:
+            pool = self._generate_initial_hypotheses(graph)
+            logger.info(f"Generated initial pool with {len(pool.hypotheses)} hypotheses")
         
         # 3. 迭代推理
         for iteration in range(self.MAX_ITERATIONS):
@@ -83,10 +102,32 @@ class ReasoningEngine:
         
         logger.info(f"Final: {len([h for h in pool.get_confirmed() if h.type == HypothesisType.ENTITY])} entities")
         return pool
+
     
     # ============================================================
     # 1. 证据提取（带绑定）
     # ============================================================
+
+    def _update_with_fusion(self, pool: HypothesisPool, evidence_pool: List[Evidence]):
+        """使用证据融合层更新所有假设"""
+        active_hypotheses = [h for h in pool.hypotheses 
+                           if h.status not in [HypothesisStatus.REJECTED, HypothesisStatus.SUPPRESSED]]
+        
+        if not active_hypotheses:
+            return
+        
+        # 使用融合层计算后验
+        posteriors = EvidenceFusion.fuse_with_softmax(active_hypotheses, evidence_pool)
+        
+        # 更新假设置信度
+        for hypothesis in active_hypotheses:
+            new_conf = posteriors.get(hypothesis.id, hypothesis.confidence)
+            old_conf = hypothesis.confidence
+            smoothed = 0.6 * old_conf + 0.4 * new_conf
+            hypothesis.confidence = round(max(0.01, min(0.99, smoothed)), 4)
+            hypothesis.confidence_history.append(
+                (hypothesis.confidence, f"fusion_iteration_{pool.iteration}")
+            )
     
     def _extract_scoped_evidence(self, graph: EvidenceGraph) -> List[Evidence]:
         """从证据图提取证据，并绑定到相关假设"""

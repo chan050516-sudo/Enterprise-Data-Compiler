@@ -15,6 +15,7 @@ class EvidenceType(str, Enum):
     ENTROPY = "entropy"
     CANONICAL_MATCH = "canonical_match"
     CONSTRAINT_VIOLATION = "constraint_violation"  # 新增：约束违反作为证据
+    SEMANTIC_INTERPRETATION = "semantic_interpretation"  # 新增：LLM 语义证据
     DERIVED = "derived"
 
 
@@ -47,6 +48,12 @@ class Evidence(BaseModel):
     
     # 归一化后的值（用于 Likelihood 计算）
     normalized_value: Optional[float] = None
+
+    # 关键新增：证据可靠性（0~1）
+    # 统计证据（FD/FK/PK）: 0.9~0.99
+    # 约束证据: 0.7~0.9
+    # LLM 语义证据: 0.4~0.7
+    reliability: float = Field(default=0.8, ge=0.0, le=1.0)
     
     # 元数据
     created_at: Optional[str] = None

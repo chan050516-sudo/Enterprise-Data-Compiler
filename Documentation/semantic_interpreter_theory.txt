@@ -1,0 +1,591 @@
+# Enterprise Data Compiler 语义解释引擎（Phase 4）完整解说
+
+---
+
+## 一、系统定位：从“结构世界”到“语义世界”
+
+在进入 Phase 4 之前，EDC 已经完成了从原始数据到结构理解的转化：
+
+```
+原始 CSV
+    │
+    ▼
+Phase 0: Technical Normalizer  → 格式统一的干净数据
+    │
+    ▼
+Phase 1: Semantic Profiler     → 列画像 IR-0（统计、模式、分布）
+    │
+    ▼
+Phase 2: Evidence Graph Builder → 证据图 IR-1（列间关系）
+    │
+    ▼
+Phase 3: Reasoning Engine V4.1 → 实体图 IR-2（结构化的业务实体）
+```
+
+IR-2 的输出长这样：
+
+```json
+{
+  "entities": [
+    {
+      "id": "ENT-001",
+      "name": "Entity_1",
+      "columns": ["cust_id", "cust_name", "phone", "email"],
+      "primary_key": "cust_id",
+      "confidence": 0.52
+    },
+    {
+      "id": "ENT-002",
+      "name": "Entity_2",
+      "columns": ["order_id", "cust_id", "amount", "order_date"],
+      "primary_key": "order_id",
+      "confidence": 0.48
+    }
+  ]
+}
+```
+
+推理引擎告诉我们：
+- 这些列**在结构上**应该属于同一个实体
+- 我们发现了主键候选
+- 我们看到了实体之间的关系（`cust_id` 连接了两个实体）
+
+但推理引擎**不知道**：
+- `Entity_1` 是 Customer 还是 Supplier？
+- `Entity_2` 是 Order 还是 Invoice？
+- 为什么 `cust_id` 出现在两个实体中？
+
+**Phase 4 要解决的就是这个问题：从结构世界 → 语义世界。**
+
+```
+IR-2: 结构实体图（"什么列在一起"）
+    │
+    ▼
+Phase 4: 语义解释引擎
+    │
+    ▼
+IR-3: 语义实体图（"这是什么业务对象"）
+
+{
+  "entities": [
+    {
+      "id": "ENT-001",
+      "name": "Customer",
+      "canonical_type": "BusinessPartner",
+      "confidence": 0.78
+    },
+    {
+      "id": "ENT-002",
+      "name": "Order",
+      "canonical_type": "CommercialDocument",
+      "confidence": 0.72
+    }
+  ]
+}
+```
+
+---
+
+## 二、核心设计哲学
+
+### 2.1 LLM 是“顾问”，不是“决策者”
+
+这是 Phase 4 最重要的设计选择，也是一切代码设计的出发点。
+
+```
+错误设计（LLM 作为决策者）：
+    Entity_1 → LLM → "Customer" → 直接覆盖实体名称
+    ↑
+    如果 LLM 错了 → 整个后续流程都错了
+    无法审计、无法追溯
+
+正确设计（LLM 作为证据提供者）：
+    Entity_1 → LLM → {候选1: Customer, 候选2: Supplier} → 作为证据
+                                                            │
+                                                            ▼
+                                                    推理引擎综合所有证据
+                                                            │
+                                                            ▼
+                                                    "Customer" (0.78)
+    ↑
+    如果 LLM 错了 → 其他证据（FD、FK、约束）可以纠正
+    可审计：知道 LLM 为什么这样认为
+```
+
+代码中的体现：
+
+```python
+# 不是这样（LLM 决策者）：
+class EntityNamer:
+    def name(self, entity) -> str:
+        return llm.generate("What is this?")  # 直接返回 "Customer"
+
+# 而是这样（LLM 证据提供者）：
+class SemanticInterpreter:
+    def interpret(self, entity) -> Evidence:
+        candidates = llm.generate("What could this be?")
+        # 返回多个候选 + 证据 + 可靠性
+        return Evidence(
+            type="semantic_interpretation",
+            data={"candidates": [Customer: 0.7, Supplier: 0.25]},
+            reliability=0.55  # LLM 证据可靠性低于统计证据
+        )
+```
+
+### 2.2 证据的统一语言
+
+整个 EDC 系统只有一个“交流语言”：**Evidence（证据）**。
+
+```
+Profiler  → 统计证据 (FD, PK Score, Jaccard)
+    │
+    ▼
+Graph Builder → 关系证据 (FK, Similarity)
+    │
+    ▼
+Constraint Engine → 约束证据 (Violation)
+    │
+    ▼
+LLM → 语义证据 (Interpretation)
+    │
+    ▼
+所有证据进入同一个 Evidence Pool
+    │
+    ▼
+推理引擎根据所有证据更新信念
+```
+
+这就像 Linux 的“一切皆文件”——让系统易于扩展和审计。
+
+### 2.3 证据的两个维度：强度 × 可靠性
+
+不是所有证据都同等重要。系统区分两个维度：
+
+| 证据类型 | 强度 (Likelihood) | 可靠性 (Reliability) | 示例 |
+| :--- | :--- | :--- | :--- |
+| 统计证据 | 0.85~0.99 | 0.90~0.99 | FD: `cust_id→cust_name` |
+| 约束证据 | 0.70~0.90 | 0.80~0.90 | PK 唯一性检查 |
+| LLM 语义证据 | 0.60~0.80 | 0.40~0.65 | "这看起来像 Customer" |
+
+融合公式：
+
+```
+log P(H|E) = log P(H) + Σ (reliability_i × log likelihood_i)
+```
+
+可靠性低的证据（如 LLM）影响力被削弱，不会覆盖确定性统计证据。
+
+---
+
+## 三、模块详解
+
+### 3.1 语义证据模型 (`semantic_evidence.py`)
+
+**职责**：定义 LLM 产出的语义证据的数据结构。
+
+```python
+class SemanticCandidate:
+    name: str                    # "Customer"
+    canonical_type: str          # "BusinessPartner"
+    likelihood: float            # 0.75
+    reliability: float           # 0.55 (LLM 证据可靠性)
+    supporting_evidence: []      # ["Has ID and Name fields"]
+    contradicting_evidence: []   # ["Missing tax_id"]
+
+class SemanticInterpretation:
+    entity_id: str               # "ENT-001"
+    candidates: [SemanticCandidate]  # 多个候选
+    reasoning: str               # 解释为什么
+```
+
+**关键设计**：
+
+1. **多候选**：LLM 输出多个可能性，而不是一个标签。
+2. **带证据**：每个候选都附上支持/反对证据（可审计）。
+3. **可靠性**：LLM 输出的可靠性低于统计证据。
+
+### 3.2 Prompt 构建器 (`prompt_builder.py`)
+
+**职责**：构建无锚定偏差的 LLM Prompt。
+
+**关键设计**：
+
+1. **只提供原始数据，不提供推理结论**（避免 LLM 被锚定）。
+2. **输入三部分**：
+   - 原始数据线索（列名、样本值、类型）
+   - 统计摘要（唯一率、空值率、模式）
+   - 关系上下文（实体间 FK/FD 关系）
+
+```
+输入示例：
+## 1. Raw Data Profile
+  - cust_id (type: string), samples: ['C001', 'C002', 'C003']
+  - cust_name (type: string), samples: ['Apple', 'Google']
+  - phone (type: string), samples: ['+60...', '+60...']
+
+## 2. Statistical Summary
+  cust_id: unique: 0.98, null: 0.00
+  cust_name: unique: 0.95, null: 0.02
+
+## 3. Relationship Context
+  order.cust_id --- cust_id (confidence: 0.91)
+
+输出要求（不透露当前推理置信度）：
+{
+  "candidates": [
+    {"name": "Customer", "likelihood": 0.75, ...},
+    {"name": "Supplier", "likelihood": 0.20, ...}
+  ]
+}
+```
+
+### 3.3 语义解释器 (`semantic_interpreter.py`)
+
+**职责**：核心协调器，决定何时调用 LLM，如何调用，如何处理输出。
+
+**关键流程**：
+
+```
+1. 评估每个实体的语义不确定性（熵）
+   ↓
+2. 只有熵 > 阈值的实体才调用 LLM
+   ↓
+3. 构建无锚定偏差的 Prompt
+   ↓
+4. 调用 LLM
+   ↓
+5. 解析输出为 SemanticInterpretation
+   ↓
+6. 转换为 Evidence 对象
+```
+
+**熵计算**：
+
+```
+语义熵 = -Σ p_i × log₂(p_i)
+
+其中 p_i 是该实体可能的语义候选概率
+
+例如：
+  {Customer: 0.45, Supplier: 0.40, Employee: 0.15}
+  → 熵 = 0.45 log 0.45 + 0.40 log 0.40 + 0.15 log 0.15 = 1.42 (高不确定性)
+  → 需要 LLM
+
+  {Customer: 0.90, Supplier: 0.05, Employee: 0.05}
+  → 熵 = 0.90 log 0.90 + 0.05 log 0.05 + 0.05 log 0.05 = 0.57 (低不确定性)
+  → 跳过 LLM，节省成本
+```
+
+### 3.4 证据融合层 (`evidence_fusion.py`)
+
+**职责**：不同来源证据的可靠性加权融合。
+
+**核心公式**：
+
+```
+log P(H|E) = log P(H) + Σ (reliability_i × log likelihood_i)
+```
+
+```
+计算示例：
+
+假设 Entity_1 的两个候选：
+  候选 A: Customer (prior: 0.50)
+  候选 B: Supplier (prior: 0.30)
+
+三个证据：
+  1. FD: cust_id → cust_name (likelihood 0.85, reliability 0.95)
+  2. FK: order.cust_id → cust_id (likelihood 0.80, reliability 0.90)
+  3. LLM: "This is likely Customer" (likelihood 0.75, reliability 0.55)
+
+融合后：
+  P(Customer) = 0.78
+  P(Supplier) = 0.22
+
+LLM 证据被适当削弱，最终决策由多个证据共同决定。
+```
+
+**LLM 证据校准**：
+
+LLM 经常过度自信（输出 0.95），需要校准：
+
+```python
+# 将 0.95 降低到 0.95 × 0.8 = 0.76
+calibrated = original × calibration_factor
+reliability = min(reliability, 0.6)
+```
+
+### 3.5 V4.3 推理引擎 (`engine_v43.py`)
+
+**职责**：整合融合层，执行闭环推理。
+
+**核心改进**：
+
+1. 使用 `EvidenceFusion` 进行可靠性加权融合
+2. 语义证据自动校准
+3. 支持增量证据注入
+
+**推理循环**：
+
+```
+do:
+    1. 用融合层更新所有假设置信度
+    2. 假设竞争（高置信度压制低置信度）
+    3. 约束检查 → 产生新证据
+    4. 派生证据生成
+while not converged
+```
+
+---
+
+## 四、完整数据流示例
+
+### 输入数据
+
+```
+customer.csv:
+cust_id, cust_name, phone, email
+C001, Apple, +6012345678, john@apple.com
+C002, Google, +6012345679, mary@google.com
+
+order.csv:
+order_id, cust_id, amount, order_date
+O001, C001, 100.00, 2024-01-01
+O002, C001, 200.00, 2024-01-02
+```
+
+### Phase 1-3 输出（IR-2）
+
+```
+Entity_001 (置信度: 0.52):
+  列: cust_id, cust_name, phone, email
+  主键: cust_id
+  证据: FD(cust_id→cust_name, 0.92), PK_Score(0.95)
+
+Entity_002 (置信度: 0.48):
+  列: order_id, cust_id, amount, order_date
+  主键: order_id
+  证据: FD(order_id→amount, 0.85), FK(cust_id→cust_id, 0.91)
+```
+
+### Phase 4 处理
+
+**Step 1: 熵计算**
+
+```
+Entity_001:
+  当前没有语义候选 → 熵 = 0.0 → 需要 LLM
+
+Entity_002:
+  当前没有语义候选 → 熵 = 0.0 → 需要 LLM
+```
+
+**Step 2: 构建 Prompt（无锚定偏差）**
+
+```
+Entity_001 的 Prompt:
+  - 列: cust_id (样本: C001), cust_name (样本: Apple), phone, email
+  - 统计: cust_id unique 0.98, cust_name unique 0.95
+  - 关系: order.cust_id → cust_id (权重 0.91)
+  - 不透露当前置信度
+
+Entity_002 的 Prompt:
+  - 列: order_id (样本: O001), cust_id (样本: C001), amount, order_date
+  - 统计: order_id unique 1.00, amount range [100, 200]
+  - 关系: order.cust_id → cust_id (权重 0.91)
+```
+
+**Step 3: LLM 输出**
+
+```json
+// Entity_001
+{
+  "candidates": [
+    {"name": "Customer", "likelihood": 0.75, "reliability": 0.55,
+     "supporting": ["Has ID and Name fields", "Referenced by Order"],
+     "contradicting": ["Missing tax_id"]},
+    {"name": "Supplier", "likelihood": 0.20, "reliability": 0.50,
+     "supporting": ["Has contact fields"],
+     "contradicting": ["No purchasing-specific columns"]}
+  ]
+}
+
+// Entity_002
+{
+  "candidates": [
+    {"name": "Order", "likelihood": 0.80, "reliability": 0.55,
+     "supporting": ["Has ID and Amount", "References Customer"],
+     "contradicting": []},
+    {"name": "Invoice", "likelihood": 0.15, "reliability": 0.50,
+     "supporting": ["Has Amount"],
+     "contradicting": ["No invoice-specific columns"]}
+  ]
+}
+```
+
+**Step 4: 转换为 Evidence**
+
+```
+语义证据1:
+  类型: SEMANTIC_INTERPRETATION
+  来源: llm_ENT-001
+  目标: ENT-001
+  数据: {candidates: [Customer, Supplier]}
+  可靠性: 0.55
+
+语义证据2:
+  类型: SEMANTIC_INTERPRETATION
+  来源: llm_ENT-002
+  目标: ENT-002
+  数据: {candidates: [Order, Invoice]}
+  可靠性: 0.55
+```
+
+**Step 5: 证据融合（V4.3）**
+
+```
+融合前:
+  ENT-001: Customer 0.52 (来自推理引擎)
+  ENT-002: Order 0.48
+
+注入语义证据后:
+  ENT-001:
+    P(Customer) ∝ 0.52 × (0.55×log 0.75) = 0.78
+    P(Supplier) ∝ 0.48 × (0.55×log 0.20) = 0.22
+  结论: Customer (0.78)
+
+  ENT-002:
+    P(Order) ∝ 0.48 × (0.55×log 0.80) = 0.72
+    P(Invoice) ∝ 0.52 × (0.55×log 0.15) = 0.28
+  结论: Order (0.72)
+```
+
+**Step 6: 输出 IR-3**
+
+```json
+{
+  "entities": [
+    {
+      "id": "ENT-001",
+      "name": "Customer",
+      "canonical_type": "BusinessPartner",
+      "confidence": 0.78,
+      "evidence": [
+        {"type": "FD", "support": 0.92},
+        {"type": "PK_Score", "support": 0.95},
+        {"type": "LLM_Semantic", "support": 0.75, "reliability": 0.55}
+      ]
+    },
+    {
+      "id": "ENT-002",
+      "name": "Order",
+      "canonical_type": "CommercialDocument",
+      "confidence": 0.72,
+      "evidence": [
+        {"type": "FD", "support": 0.85},
+        {"type": "FK", "support": 0.91},
+        {"type": "LLM_Semantic", "support": 0.80, "reliability": 0.55}
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 五、为什么这样设计？
+
+### 5.1 可审计性
+
+企业级工具必须知道“为什么”。
+
+```
+传统 AI 工具：
+  "Entity_001 is Customer" ← 不知道为什么，无法追溯
+
+EDC Phase 4：
+  "Entity_001 is Customer (0.78)
+   因为:
+   - FD evidence: cust_id → cust_name (0.92)
+   - PK evidence: cust_id unique (0.95)
+   - LLM evidence: 'Has ID and Name' (0.75)
+   - LLM reliability: 0.55"
+```
+
+### 5.2 LLM 幻觉防护
+
+```
+如果 LLM 说："Entity_001 is Supplier"
+
+系统会检查：
+  - FD: cust_id → cust_name (0.92)   ← 支持 Customer
+  - FK: order.cust_id → cust_id (0.91) ← 支持 Customer
+  - LLM: Supplier (0.55 reliability)  ← 被削弱
+
+最终: Customer (0.72) vs Supplier (0.28)
+LLM 错误被其他证据纠正
+```
+
+### 5.3 成本控制
+
+```
+不是所有实体都需要 LLM：
+  - 高置信度实体 → 跳过 LLM
+  - 低不确定性实体 → 跳过 LLM
+  - 只有高不确定性的实体才调用 LLM
+
+成本节约: 60-80%
+```
+
+### 5.4 可扩展性
+
+```
+现在: Gemini
+未来: GPT-6, Claude, Llama, 本地模型
+
+只需替换:
+  self.llm_client = new_model
+  self.default_model = "new-model"
+
+其他代码无需改动（依赖注入）
+```
+
+---
+
+## 六、与其他 Phase 的关系
+
+```
+Phase 0-1: 数据理解（"数据长什么样"）
+    │
+    ▼
+Phase 2: 关系发现（"列之间什么关系"）
+    │
+    ▼
+Phase 3: 结构推理（"什么列属于同一个实体"）
+    │
+    ▼
+Phase 4: 语义解释（"这个实体在业务中是什么"）← 我们在这里
+    │
+    ▼
+Phase 5: 本体映射（"这个实体对应目标系统的什么"）
+    │
+    ▼
+Phase 6: 迁移编译（"如何将数据转换过去"）
+```
+
+---
+
+## 七、关键设计决策总结
+
+| 决策 | 为什么 |
+| :--- | :--- |
+| **LLM 是证据提供者，不是决策者** | 防幻觉、可审计 |
+| **多候选输出** | 保留不确定性，让推理引擎裁决 |
+| **可靠性字段** | LLM 证据不应等同于统计证据 |
+| **无锚定偏差的 Prompt** | 避免 LLM 盲从推理引擎的偏见 |
+| **证据融合层** | 统一处理不同来源的证据 |
+| **基于熵的自适应调用** | 节省成本，只在必要时调用 LLM |
+| **LLM 证据校准** | 降低过度自信 |
+| **闭环推理** | 语义证据反馈到推理引擎，与其他证据融合 |
+
+这个系统不再是"AI 猜名字"，而是 **"多个证据来源共同推理出一个语义结论"**——这就是企业级知识引擎的核心思想。
