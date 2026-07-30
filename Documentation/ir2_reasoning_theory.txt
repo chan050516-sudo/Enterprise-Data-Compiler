@@ -1,0 +1,480 @@
+# Enterprise Data Compiler V4.1 推理引擎原理解说
+
+---
+
+## 一、系统定位
+
+V4.1 是整个 EDC 推理链路的**第三阶段**（Phase 3）。它的输入是 **IR-1（证据图）**，输出是 **IR-2（业务实体图）**。
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Enterprise Data Compiler 架构                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  Phase 0: Technical Normalizer  →  规范化数据                       │
+│  Phase 1: Semantic Profiler     →  IR-0 列画像                     │
+│  Phase 2: Evidence Graph Builder →  IR-1 证据图                    │
+│  Phase 3: Reasoning Engine V4.1 →  IR-2 业务实体图  ← 当前模块      │
+│  Phase 4: LLM Naming            →  IR-3 规范本体图                  │
+│  Phase 5: Compiler              →  可执行迁移计划                   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 二、核心原理
+
+V4.1 的核心思想是：**把数据迁移推理建模为贝叶斯推理过程，让多个竞争性假设在证据的驱动下自然收敛。**
+
+### 2.1 数学基础
+
+V4.1 使用**贝叶斯定理**作为核心推理引擎：
+
+$$P(H|E) = \frac{P(E|H) \cdot P(H)}{P(E)}$$
+
+其中：
+
+| 符号 | 含义 | V4.1 中的实现 |
+| :--- | :--- | :--- |
+| $P(H)$ | 先验概率 | 假设的初始置信度（默认 0.3） |
+| $P(E\|H)$ | 似然 | `LikelihoodProvider.likelihood()` |
+| $P(H\|E)$ | 后验概率 | 假设更新后的置信度 |
+
+**核心创新**：V4.1 使用**对数空间**进行计算，避免多个小概率相乘导致的下溢问题：
+
+$$ \log P(H|E) = \log P(H) + \sum_{i} \log P(E_i|H) - \log Z $$
+
+最后通过 **Softmax 归一化**得到真正的概率分布：
+
+$$P_i = \frac{e^{\log P_i}}{\sum_j e^{\log P_j}}$$
+
+### 2.2 关键机制
+
+V4.1 有四个核心机制：
+
+| 机制 | 作用 | 关键实现 |
+| :--- | :--- | :--- |
+| **证据绑定** | 每个证据只影响相关的假设 | `Evidence.scope` + `target_hypotheses` |
+| **对数概率更新** | 避免乘积下溢 | `LogLikelihoodCalculator` + `softmax` |
+| **约束闭环** | 约束违反转换为证据，重新进入推理 | `ConstraintViolation.to_evidence()` |
+| **派生证据** | 推理结果产生新证据，驱动更深层推理 | `DerivedEvidenceEngine` |
+
+### 2.3 证据类型与似然表
+
+V4.1 使用可插拔的 Likelihood Provider，内置以下映射：
+
+| 证据类型 | 假设类型 | 似然 $P(E\|H)$ | 说明 |
+| :--- | :--- | :--- | :--- |
+| FD | Entity | 0.85 | FD 强烈支持同一实体 |
+| FD | Cross-Entity | 0.15 | FD 跨实体罕见 |
+| PK Score (高) | Entity | 0.90 | 高 PK 评分强烈支持实体 |
+| PK Score (低) | Entity | 0.30 | 低 PK 评分弱支持 |
+| Jaccard (高) | Entity | 0.80 | 高值重叠支持同一实体 |
+| Jaccard (低) | Entity | 0.20 | 低值重叠不支持 |
+| FK | Relationship | 0.75 | FK 支持关系假设 |
+| FK | Entity | 0.25 | FK 对实体支持较弱 |
+| Canonical Match | Entity | 0.85 | 本体匹配强支持 |
+| Constraint Violation | Entity | 0.10 | 约束违反削弱假设 |
+
+---
+
+## 三、完整推理流程
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         推理流程总览                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────────┐                                                 │
+│  │  IR-1 证据图  │                                                 │
+│  └──────┬───────┘                                                 │
+│         ▼                                                         │
+│  ┌──────────────┐                                                 │
+│  │ 1. 证据提取   │  →  将图转为 Evidence 对象，绑定范围           │
+│  └──────┬───────┘                                                 │
+│         ▼                                                         │
+│  ┌──────────────┐                                                 │
+│  │ 2. 假设生成   │  →  Louvain + 多种策略生成竞争假设              │
+│  └──────┬───────┘                                                 │
+│         ▼                                                         │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                   迭代推理循环 (最多20轮)                     │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │  │
+│  │  │ 3.1 后验更新  │→│ 3.2 假设竞争 │→│ 3.3 约束检查  │      │  │
+│  │  │ (对数概率)   │  │ (后验比较)   │  │ (→约束证据)  │      │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘      │  │
+│  │         ▼                  ▼                  ▼              │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │  │
+│  │  │ 3.4 派生证据  │  │ 3.5 收敛检查  │  │ 3.6 假设演化  │      │  │
+│  │  │ (推理→证据)  │  │ (Δ置信度<2%)│  │ (合并/分裂)   │      │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘      │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│         ▼                                                         │
+│  ┌──────────────┐                                                 │
+│  │ 4. 最终确认   │  →  置信度>0.5 → CONFIRMED                    │
+│  └──────┬───────┘                                                 │
+│         ▼                                                         │
+│  ┌──────────────┐                                                 │
+│  │   IR-2        │  →  业务实体图输出                             │
+│  └──────────────┘                                                 │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 四、完整推理示例
+
+### 4.1 输入数据
+
+假设我们有一个包含以下列的 CSV 文件：
+
+```
+customer_id, customer_name, phone, email, invoice_id, cust_id, amount, date
+```
+
+实际业务含义：
+- `customer_id`, `customer_name`, `phone`, `email` → **Customer 实体**
+- `invoice_id`, `cust_id`, `amount`, `date` → **Invoice 实体**（`cust_id` 引用 `customer_id`）
+
+### 4.2 Phase 2 输出的证据图（IR-1）
+
+经过前两阶段处理，Evidence Graph 包含以下关键边：
+
+| 边类型 | 源列 | 目标列 | 权重 | 证据 |
+| :--- | :--- | :--- | :--- | :--- |
+| **FD** | `customer_id` | `customer_name` | 0.92 | 唯一ID→唯一名称 |
+| **FD** | `customer_id` | `phone` | 0.88 | 唯一ID→唯一电话 |
+| **FD** | `invoice_id` | `amount` | 0.85 | 发票ID→金额 |
+| **FD** | `invoice_id` | `date` | 0.82 | 发票ID→日期 |
+| **POSSIBLE_FK** | `cust_id` | `customer_id` | 0.91 | 值高度重叠 |
+| **SIMILAR_TO** | `customer_id` | `cust_id` | 0.78 | 列名相似 |
+| **SIMILAR_TO** | `customer_name` | `cust_id` | 0.15 | 弱关联 |
+
+### 4.3 V4.1 推理过程逐步解析
+
+---
+
+#### Step 1: 证据提取（带绑定）
+
+V4.1 将证据图转换为带有作用域的证据对象：
+
+```
+Evidence 1: FD(customer_id → customer_name)
+  类型: FD, 范围: ENTITY, 绑定: customer_id, customer_name
+
+Evidence 2: FD(invoice_id → amount)
+  类型: FD, 范围: ENTITY, 绑定: invoice_id, amount
+
+Evidence 3: FK(cust_id → customer_id)
+  类型: FK, 范围: RELATIONSHIP, 绑定: cust_id, customer_id
+
+Evidence 4: PK_SCORE(customer_id)
+  类型: PK_SCORE, 值: 0.95, 范围: COLUMN, 绑定: customer_id
+
+Evidence 5: PK_SCORE(invoice_id)
+  类型: PK_SCORE, 值: 0.93, 范围: COLUMN, 绑定: invoice_id
+
+Evidence 6: PK_SCORE(cust_id)
+  类型: PK_SCORE, 值: 0.35, 范围: COLUMN, 绑定: cust_id
+```
+
+---
+
+#### Step 2: 初始假设生成
+
+V4.1 使用多种策略生成多个**竞争性假设**：
+
+```
+假设 H1 (实体): {customer_id, customer_name, phone, email}
+  来源: Louvain 聚类, 初始置信度: 0.65
+
+假设 H2 (实体): {invoice_id, amount, date, cust_id}
+  来源: Louvain 聚类, 初始置信度: 0.60
+
+假设 H3 (实体): {customer_id, customer_name, invoice_id, amount}
+  来源: Core-based (以 customer_id 为核心扩展)
+  初始置信度: 0.55
+
+假设 H4 (实体): {cust_id, customer_id, customer_name}
+  来源: FK-based (以 FK 关系为核心)
+  初始置信度: 0.70
+
+假设 H5 (关系): {source: cust_id, target: customer_id}
+  来源: FK 边, 初始置信度: 0.65
+```
+
+---
+
+#### Step 3.1: 第一轮后验更新
+
+V4.1 计算每个假设的对数后验概率：
+
+**假设 H1 (Customer 实体)**
+
+涉及的证据：
+- FD(customer_id → customer_name) → 似然 0.85
+- FD(customer_id → phone) → 似然 0.85
+- PK_SCORE(customer_id) → 似然 0.90
+
+对数计算：
+```
+log P(H1) = log(0.65) = -0.43
+log P(E1|H1) = log(0.85) = -0.16
+log P(E2|H1) = log(0.85) = -0.16
+log P(E3|H1) = log(0.90) = -0.10
+总计 = -0.43 - 0.16 - 0.16 - 0.10 = -0.85
+P = 0.43 (经 Softmax 归一化)
+```
+
+**假设 H2 (Invoice 实体)**
+
+涉及的证据：
+- FD(invoice_id → amount) → 似然 0.85
+- FD(invoice_id → date) → 似然 0.85
+- PK_SCORE(invoice_id) → 似然 0.90
+- PK_SCORE(cust_id) → 似然 0.30 (低)
+
+对数计算：
+```
+log P(H2) = log(0.60) = -0.51
+log P(E1|H2) = log(0.85) = -0.16
+log P(E2|H2) = log(0.85) = -0.16
+log P(E3|H2) = log(0.90) = -0.10
+log P(E4|H2) = log(0.30) = -0.52
+总计 = -0.51 - 0.16 - 0.16 - 0.10 - 0.52 = -1.45
+P = 0.23 (经 Softmax 归一化)
+```
+
+**假设 H3 (混合实体)**
+
+涉及的证据：
+- FD(customer_id → customer_name) → 0.85
+- FD(invoice_id → amount) → 0.85
+- PK_SCORE(customer_id) → 0.90
+- PK_SCORE(invoice_id) → 0.90
+- 但 FK 证据不支持混合 → 0.25
+
+```
+总计 = log(0.55) -0.16 -0.16 -0.10 -0.10 -0.60 = -1.67
+P = 0.19 (经 Softmax 归一化)
+```
+
+**假设 H4 (FK 关联实体)**
+
+涉及的证据：
+- FK(cust_id → customer_id) → 0.75
+- SIMILAR_TO(customer_id, cust_id) → 0.78
+
+```
+总计 = log(0.70) -0.12 -0.10 = -0.32
+P = 0.46 (经 Softmax 归一化)
+```
+
+**Softmax 归一化后**：
+```
+H1: 0.43 → 最高置信度
+H4: 0.46 → 实际上最高
+H2: 0.23
+H3: 0.19
+```
+
+**观察**：H4 比 H1 置信度更高，因为 FK 证据很强，且 H4 同时关联了 Customer 和 Invoice 的信息。
+
+---
+
+#### Step 3.2: 假设竞争
+
+V4.1 检测假设之间的重叠：
+
+- H1 和 H4 重叠率：
+  ```
+  交集: {customer_id, customer_name}
+  并集: {customer_id, customer_name, cust_id}
+  重叠率: 2/3 = 0.67 > 0.3
+  ```
+
+- H4 置信度 (0.46) > H1 置信度 (0.43)，差值 0.03 < 0.1
+  差值不够大 → **两个假设都保持活跃，继续竞争**（不立即压制）
+
+- H2 和 H3 重叠率低 → 各自独立
+
+---
+
+#### Step 3.3: 约束检查 → 约束证据
+
+Constraint Engine 发现违反：
+
+**违反 1: PK 唯一性**
+- H1 (Customer) 有多个 PK 候选：`customer_id`, `cust_id`
+- 生成约束证据：
+  ```
+  Evidence: CONSTRAINT_VIOLATION
+  类型: pk_uniqueness, 严重度: 0.8
+  绑定: H1, H4
+  似然: 0.10 (违反约束 → 削弱假设)
+  ```
+
+**违反 2: 实体边界**
+- H4 包含来自两个业务域的列：`customer_id`（Customer）和 `cust_id`（Invoice 的外键）
+- 生成约束证据：
+  ```
+  Evidence: CONSTRAINT_VIOLATION
+  类型: entity_boundary, 严重度: 0.5
+  绑定: H4
+  似然: 0.20
+  ```
+
+这些约束证据**作为新的证据进入下一轮推理**，而不是直接扣分。
+
+---
+
+#### Step 3.4: 派生证据
+
+V4.1 从当前假设派生新证据：
+
+- 从 H1 派生 Canonical 证据：
+  ```
+  Evidence: CANONICAL_MATCH
+  派生: H1 包含 ID + Name → 可能是 Party 类型
+  绑定: H1
+  似然: 0.85
+  ```
+
+- 从 H2 派生 Canonical 证据：
+  ```
+  Evidence: CANONICAL_MATCH
+  派生: H2 包含 ID + Amount + Date → 可能是 Document 类型
+  绑定: H2
+  似然: 0.75
+  ```
+
+---
+
+#### Step 3.5 & 3.6: 下一轮迭代
+
+第二轮后验更新时，约束证据和派生证据共同作用：
+
+| 假设 | 第一轮 | 第二轮变化 | 第二轮结果 |
+| :--- | :--- | :--- | :--- |
+| H1 (Customer) | 0.43 | +约束0.10 + Canonical0.85 → +0.02 | **0.45** |
+| H4 (FK 实体) | 0.46 | -约束0.20 → -0.08 | **0.38** |
+| H2 (Invoice) | 0.23 | +Canonical0.75 → +0.03 | **0.26** |
+| H3 (混合) | 0.19 | -约束0.25 → -0.05 | **0.14** |
+
+**关键变化**：
+- H4 因违反约束而被削弱（0.46 → 0.38）
+- H1 因 Canonical 证据得到增强（0.43 → 0.45）
+- H1 现在超过 H4，成为胜出假设
+
+---
+
+#### Step 3.7: 假设竞争（第二轮）
+
+- H1 置信度 (0.45) > H4 置信度 (0.38)，差值 0.07
+- 差值仍小于 0.1 → 继续竞争
+
+---
+
+#### Step 3.8: 假设演化
+
+经过多轮迭代，置信度逐渐收敛：
+
+| 迭代 | H1 | H4 | H2 | H3 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | 0.43 | **0.46** | 0.23 | 0.19 |
+| 2 | **0.45** | 0.38 | 0.26 | 0.14 |
+| 3 | **0.48** | 0.35 | 0.27 | 0.12 |
+| 4 | **0.50** | 0.33 | 0.28 | 0.10 |
+| 5 | **0.52** | 0.31 | 0.28 | 0.09 |
+
+收敛条件：平均置信度变化 < 0.02
+从第 5 轮开始变化 < 0.02 → 系统收敛
+
+---
+
+#### Step 4: 最终确认
+
+```
+H1 (Customer 实体): 置信度 0.52 → CONFIRMED
+  列: customer_id, customer_name, phone, email
+  PK: customer_id
+  Canonical: Party
+
+H2 (Invoice 实体): 置信度 0.28 → CONFIRMED
+  列: invoice_id, amount, date, cust_id
+  PK: invoice_id
+  FK: cust_id → Customer.customer_id
+
+H3 (混合实体): 置信度 0.09 → REJECTED
+
+H5 (关系假设): 
+  FK: cust_id → customer_id
+  基数: N:1
+  置信度: 0.68 → CONFIRMED
+```
+
+---
+
+### 4.4 输出结果 (IR-2)
+
+```json
+{
+  "entities": [
+    {
+      "id": "ENT-001",
+      "name": "Customer",
+      "columns": ["customer_id", "customer_name", "phone", "email"],
+      "primary_key": "customer_id",
+      "confidence": 0.52,
+      "evidence": ["FD: customer_id→customer_name", "PK_SCORE: 0.95", "Canonical: Party"]
+    },
+    {
+      "id": "ENT-002",
+      "name": "Invoice",
+      "columns": ["invoice_id", "amount", "date", "cust_id"],
+      "primary_key": "invoice_id",
+      "foreign_keys": [{"column": "cust_id", "references": "Customer.customer_id"}],
+      "confidence": 0.28,
+      "evidence": ["FD: invoice_id→amount", "PK_SCORE: 0.93"]
+    }
+  ],
+  "relationships": [
+    {
+      "source": "Invoice",
+      "target": "Customer",
+      "cardinality": "N:1",
+      "foreign_key": "cust_id",
+      "referenced": "customer_id",
+      "confidence": 0.68
+    }
+  ]
+}
+```
+
+---
+
+## 五、V4.1 与 V3 的核心差异
+
+| 特性 | V3 (启发式优化) | V4.1 (概率推理) |
+| :--- | :--- | :--- |
+| **评分机制** | 线性加权 `0.35×a + 0.25×b` | 贝叶斯后验 `P(H\|E)` |
+| **概率计算** | 直接相加 | 对数空间 + Softmax |
+| **证据绑定** | 全部证据影响全部假设 | 证据只影响绑定的假设 |
+| **约束处理** | if-else 硬规则 | 约束 → 证据 → 推理闭环 |
+| **假设竞争** | 重叠规则压制 | 后验概率比较 |
+| **数学基础** | 启发式 | 贝叶斯定理 |
+| **可扩展性** | 加规则 | 加 Evidence Provider |
+
+---
+
+## 六、为什么 V4.1 是真正的"推理引擎"？
+
+| 特征 | 说明 |
+| :--- | :--- |
+| **不确定性量化** | 每个假设都有置信度，不是黑白判断 |
+| **证据累积** | 多个证据通过贝叶斯规则自然累积 |
+| **证据绑定** | 证据只影响相关假设，避免噪声污染 |
+| **闭环反馈** | 约束违反→证据→重新推理，形成闭环 |
+| **假设竞争** | 多个假设同时存在，自然淘汰 |
+| **收敛机制** | 置信度稳定后自动收敛 |
+| **可插拔** | Likelihood Provider 可替换，支持规则/学习/LLM |
