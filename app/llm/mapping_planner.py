@@ -30,6 +30,7 @@ class MappingPlanner:
         domain: str,
         version: str = "v1.0",
         parent_spec_id: Optional[str] = None,
+        semantic_context: Optional[Dict[str, Any]] = None,
     ) -> MappingSpec:
         """
         执行完整的映射规划（理解+生成IR）。
@@ -41,6 +42,7 @@ class MappingPlanner:
             evidence_graph=evidence_graph,
             canonical_ontology=canonical_ontology,
             target_ontology=target_ontology,
+            semantic_context=semantic_context
         )
 
         logger.info("Requesting Mapping Plan (Reasoning + IR) from LLM...")

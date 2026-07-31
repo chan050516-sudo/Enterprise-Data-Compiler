@@ -73,45 +73,71 @@ def build_mapping_planner_prompt(
     evidence_graph: EvidenceGraph,
     canonical_ontology: Dict[str, Any],
     target_ontology: Dict[str, Any],
+    semantic_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """构建用户 Prompt（包含源 Schema、证据包、规范本体、目标本体）"""
 
-   # 提取高置信度的 FK 候选和相似列
-    fk_hints = []
-    attr_hints = []
-    for edge in sorted(evidence_graph.edges, key=lambda x: -x.weight)[:15]:
-        if edge.edge_type == EdgeType.POSSIBLE_FK and edge.weight > 0.7:
-            fk_hints.append(
-                f"- {edge.source_column} may reference {edge.target_column} "
-                f"(overlap: {edge.evidence.value_overlap:.2f})"
-            )
-        elif edge.edge_type == EdgeType.SAME_ATTRIBUTE and edge.weight > 0.8:
-            attr_hints.append(
-                f"- {edge.source_column} is semantically similar to {edge.target_column}"
-            )
+    # 提取高置信度的 FK 候选和相似列
+    # fk_hints = []
+    # attr_hints = []
+    # for edge in sorted(evidence_graph.edges, key=lambda x: -x.weight)[:15]:
+    #     if edge.edge_type == EdgeType.POSSIBLE_FK and edge.weight > 0.7:
+    #         fk_hints.append(
+    #             f"- {edge.source_column} may reference {edge.target_column} "
+    #             f"(overlap: {edge.evidence.value_overlap:.2f})"
+    #         )
+    #     elif edge.edge_type == EdgeType.SAME_ATTRIBUTE and edge.weight > 0.8:
+    #         attr_hints.append(
+    #             f"- {edge.source_column} is semantically similar to {edge.target_column}"
+    #         )
 
     prompt_parts = [
-        "Please plan a complete mapping from the source schema to the target ontology.",
+        "You are an enterprise data migration expert.",
         "",
-        "## Source Schema (Structure + Constraints)",
+        "## Task",
+        "Generate a mapping specification from the source schema to the target ontology.",
+    ]
+
+    # 语义上下文
+    if semantic_context:
+        entity_name = semantic_context.get("entity_name", "Unknown")
+        canonical_type = semantic_context.get("canonical_type", "Unknown")
+        source_columns = semantic_context.get("source_columns", [])
+        target_table = semantic_context.get("target_table", "unknown")
+        target_description = semantic_context.get("target_description", "")
+        
+        prompt_parts.extend([
+            "",
+            "## Business Context (CRITICAL)",
+            f"The source data represents a **{entity_name}** business entity.",
+            f"**Canonical Type**: {canonical_type}",
+            f"**Source Columns**: {', '.join(source_columns)}",
+            f"**Target Table**: {target_table}",
+            f"**Target Table Description**: {target_description or 'No description available'}",
+            "",
+            "Use this context to guide your mapping decisions."
+        ])
+
+    prompt_parts.extend([
+        "",
+        "## Source Schema",
         json.dumps(source_schema, indent=2, default=str),
         "",
-        "## Evidence Graph (IR-1) - Key Relationships Detected",
-        "### Foreign Key Candidates (High Confidence):",
-        "\n".join(fk_hints) if fk_hints else "None detected.",
+        "## Source Evidence Pack",
+        json.dumps(evidence_graph, indent=2, default=str),
         "",
-        "### Same Attribute Candidates (High Confidence):",
-        "\n".join(attr_hints) if attr_hints else "None detected.",
-        "",
-        "## Canonical Ontology (Standard Semantic Concepts)",
+        "## Canonical Ontology (Reference)",
         json.dumps(canonical_ontology, indent=2, default=str),
         "",
-        "## Target Physical Ontology (Destination ERP Schema)",
+        "## Target Ontology",
         json.dumps(target_ontology, indent=2, default=str),
         "",
         "## Output Instructions",
-        "Return a JSON object with fields: 'reasoning_summary', 'evidence_chain', 'ir_graph'.",
-        "Ensure the IR graph uses only the allowed operators and forms a valid DAG.",
-        "Use the evidence graph hints to disambiguate columns."
-    ]
+        "Generate a MappingSpec with:",
+        "1. intermediate_steps: transformation steps",
+        "2. output_mappings: source → target field mappings",
+        "",
+        "Return valid JSON only."
+    ])
+    
     return "\n".join(prompt_parts)
