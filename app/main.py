@@ -23,7 +23,7 @@ from app.naming.semantic_interpreter import SemanticInterpreter
 from app.mapping.orchestrator import MappingOrchestrator
 from app.metadata.providers.manual_provider import ManualProvider
 from app.execution.orchestrator import PipelineOrchestrator
-from app.execution.wave_orchestrator import WaveOrchestrator
+from app.control.wave_orchestrator import WaveOrchestrator
 from app.execution.state_machine import BatchState
 from app.harness.ir_validator import IRValidator
 from app.review.quarantine_viewer import QuarantineViewer
@@ -332,7 +332,8 @@ def main():
                 db_path=args.db_out,
                 mapping_planner=planner,
                 knowledge_base=kb,
-                spec_governor=governor
+                spec_governor=governor,
+                evidence_graph=evidence_graph
             )
             
             clean_df, quarantine_df, audit_report, lifecycle, trace = orchestrator.run_pipeline(

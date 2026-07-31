@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 
 from app.control.governor import SpecGovernor
 from app.schema.semantic_profiler import SemanticProfiler
+from app.schema.evidence_graph_ir import EvidenceGraph
+from app.evidence.builder import EvidenceGraphBuilder
+from app.schema.semantic_profiler import SemanticProfiler
 from app.llm.mapping_planner import MappingPlanner
 from app.knowledge.knowledge_base import KnowledgeBase
 from app.harness.ir_validator import IRValidator
@@ -14,7 +17,7 @@ from app.harness.trust_evaluator import DataTrustEngine
 from app.harness.report import TrustAuditReport
 from app.schema.ir_model import MappingSpec
 from app.ontology.schema_introspection import SchemaInspector
-
+from app.control.spec_repo import SpecRepository
 from app.execution.state_machine import BatchLifecycle, BatchState
 from app.execution.reconciliation import ReconciliationEngine
 from app.execution.saga_manager import SagaManager
@@ -26,10 +29,13 @@ class PipelineOrchestrator:
     """
     Global Orchestration Hub: 驱动 8 层数据编译流水线，包含带统计学视觉的 MAPE-K 自愈循环。
     """
-    def __init__(self, db_path: str = "enterprise_target.db", 
-             mapping_planner: Optional[MappingPlanner] = None,
-             knowledge_base: Optional[KnowledgeBase] = None,
-             spec_governor: Optional[SpecGovernor] = None):
+    def __init__(
+        self, db_path: str = "enterprise_target.db", 
+        mapping_planner: Optional[MappingPlanner] = None,
+        knowledge_base: Optional[KnowledgeBase] = None,
+        spec_governor: Optional[SpecGovernor] = None,
+        evidence_graph: Optional[EvidenceGraph] = None
+    ):
         # self.mapper = SemanticMapper(llm_client)
         self.compiler = IRCompiler()
         self.enforcer = DataTrustEngine() 
@@ -39,6 +45,7 @@ class PipelineOrchestrator:
         self.mapping_planner = mapping_planner
         self.knowledge_base = knowledge_base
         self.spec_governor = spec_governor
+        self.evidence_graph = evidence_graph
 
     def run_pipeline(
         self, 
@@ -132,7 +139,15 @@ class PipelineOrchestrator:
                     # 获取源 Schema
                     source_schema = SchemaInspector.from_dataframe(source_df)
 
-                    evidence_pack = SemanticProfiler.build_evidence_pack(source_df)
+                    evidence_graph = self._evidence_graph
+        
+                    if evidence_graph is None:
+                        # 降级方案：如果没有传入，从 knowledge_base 重建
+                        logger.warning("No evidence_graph provided, rebuilding from source data...")
+                        profiles = SemanticProfiler.generate_column_profiles(source_df)
+                        evidence_graph = EvidenceGraphBuilder.build(profiles, source_df)
+                        # 缓存以备后续使用
+                        self._evidence_graph = evidence_graph
 
                     # 生成补丁规格（需要传入 canonical_ontology，若不可用则用 target_ontology）
                     # 注意：此处 canonical_ontology 可能需要从外部传入，这里假设通过 run_pipeline 参数或类属性提供
@@ -140,15 +155,15 @@ class PipelineOrchestrator:
 
                     patch_spec = self.mapping_planner.plan(
                         source_schema=source_schema,
-                        evidence_pack=evidence_pack,
+                        evidence_graph=evidence_graph,
                         canonical_ontology=canonical_onto,
                         target_ontology=target_ontology,
                         domain=active_spec.domain,
                         version=f"{active_spec.version}-patch",
                         parent_spec_id=active_spec.spec_id
                     )
+
                     # 通过 Governor 保存为 DRAFT
-                    from app.control.spec_repo import SpecRepository
                     repo = SpecRepository()
                     repo.save(patch_spec)
                     logger.info(f"🔄 Auto-generated patch spec {patch_spec.spec_id} based on failure context.")

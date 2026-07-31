@@ -1,9 +1,10 @@
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import pandas as pd
 
 from app.ontology.schema_introspection import SchemaInspector
 from app.schema.wave_model import MigrationWave, WaveTask
+from app.schema.evidence_graph_ir import EvidenceGraph
 from app.control.spec_repo import SpecRepository
 from app.ontology.business_schema import OntologyRegistryManager
 from app.execution.orchestrator import PipelineOrchestrator
@@ -23,11 +24,13 @@ class WaveOrchestrator:
         self, 
         pipeline_orchestrator: PipelineOrchestrator, 
         spec_repo: SpecRepository,
-        ontology_registry: OntologyRegistryManager
+        ontology_registry: OntologyRegistryManager,
+        evidence_graph: Optional[EvidenceGraph] = None
     ):
         self.pipeline = pipeline_orchestrator
         self.spec_repo = spec_repo
         self.ontology_registry = ontology_registry
+        self._evidence_graph = evidence_graph
         
         # 跨任务内存级参照池 (用于下游做外键校验)
         self._global_reference_pool: Dict[str, pd.DataFrame] = {}
@@ -135,7 +138,8 @@ class WaveOrchestrator:
                 active_spec=active_spec,
                 target_ontology=target_ontology,
                 reference_data=reference_data,
-                extra_dataframes=extra_dfs
+                extra_dataframes=extra_dfs,
+                evidence_graph=self._evidence_graph
             )
 
             # 5. 分析执行结果与阻断策略 (Failure Threshold Assessment)
