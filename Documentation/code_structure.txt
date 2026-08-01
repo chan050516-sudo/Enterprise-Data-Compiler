@@ -10,14 +10,16 @@ enterprise-data-compiler/
 │   │   └── settings.py
 │
 │   ├── connectors/
-│   │   ├── base.py 
-│   │   ├── csv_connector.py 
-│   │   └── excel_connector.py 
+│   │   ├── base.py
+│   │   └── csv_connector.py 
 │
 │   ├── control/
 │   │   ├── governor.py 
 │   │   ├── spec_repo.py 
-│   │   └── wave_orchestrator.py 
+│   │   └── wave_orchestrator.py
+│
+│   ├── evidence/
+│   │   └── builder.py
 │
 │   ├── execution/
 │   │   ├── inverse_compiler.py 

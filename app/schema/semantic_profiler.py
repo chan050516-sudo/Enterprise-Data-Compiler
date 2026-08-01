@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import re
+import math
 import logging
 from typing import Dict, Any, List, Optional
 from app.schema.profile_ir import ColumnProfileIR
@@ -112,10 +112,13 @@ class SemanticProfiler:
                 if avg_len and avg_len < 10 and unique_ratio > 0.9:
                     candidate_types.append("code")
 
-            # 5. 样本（保留前 5 个非空）
+            # 5. 熵计算（新增）
+            entropy = cls._compute_entropy(series)
+
+            # 6. 样本（保留前 5 个非空）
             samples = valid_series.head(5).tolist() if valid_count > 0 else []
 
-            # 6. 构建 Profile 对象（注入所有新字段）
+            # 7. 构建 Profile 对象（注入所有新字段）
             profile = ColumnProfileIR(
                 column_name=col,
                 dataset_name=dataset_name,
@@ -136,12 +139,23 @@ class SemanticProfiler:
                 top_frequencies=top_freq,              # 新增
                 samples=samples,
                 candidate_types=candidate_types,       # 新增
+                entropy=entropy,
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )
             profiles.append(profile)
         
         logger.info(f"Generated {len(profiles)} column profiles.")
         return profiles
+
+    @classmethod
+    def _compute_entropy(cls, series: pd.Series) -> Optional[float]:
+        """计算信息熵 (Shannon Entropy)"""
+        if series.empty:
+            return None
+        probs = series.value_counts(normalize=True)
+        if len(probs) <= 1:
+            return 0.0
+        return round(-sum(p * math.log2(p) for p in probs if p > 0), 4)
 
     @classmethod
     def _infer_business_concept(cls, series: pd.Series) -> Optional[str]:

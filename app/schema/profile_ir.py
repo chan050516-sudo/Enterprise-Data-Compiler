@@ -43,6 +43,12 @@ class ColumnProfileIR(BaseModel):
         default_factory=list,
         description="候选业务类型，如 ['code', 'string'], ['currency', 'numeric']"
     )
+
+    # ---------- 信息熵（新增） ----------
+    entropy: Optional[float] = Field(
+        default=None,
+        description="列的信息熵，衡量值的多样性"
+    )
     
     # ---------- 内部缓存（用于关系计算，不序列化） ----------
     _value_set: Optional[Set[Any]] = None

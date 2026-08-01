@@ -8,6 +8,7 @@ from typing import List, Set, Dict, Any, Optional, Tuple
 from collections import defaultdict
 from app.schema.profile_ir import ColumnProfileIR
 from app.schema.evidence_graph_ir import EvidenceGraph, GraphNode, GraphEdge, EdgeType, EvidenceDetail
+from app.schema.column_embedding_vector import ColumnSemanticVector
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,30 @@ class EvidenceGraphBuilder:
                 sample_rows=2000
             )
 
+            # ===== 新增：生成 Column Semantic Vector =====
+            # 用于列匹配，不依赖列名关键词
+            try:
+                # 获取样本值并生成 embedding（简化版）
+                samples = p.samples[:10] if p.samples else []
+                # 如果有 embedding 引擎，可以生成 name_embedding 和 value_embedding
+                # 这里我们先构建基础向量，不依赖外部 embedding 模型
+                col_semantic_vector = ColumnSemanticVector(
+                    datatype=p.data_type,
+                    cardinality=p.distinct_count,
+                    uniqueness=p.unique_ratio,
+                    null_ratio=p.null_ratio,
+                    entropy=entropy or 0.0,
+                    avg_length=p.avg_length,
+                    pattern_signature=p.pattern or "unknown",
+                    distribution_profile=p.percentiles or {},
+                    candidate_types=p.candidate_types or []
+                    # name_embedding 和 value_embedding_centroid 可在后续阶段补充
+                )
+                col_semantic_vector_dict = col_semantic_vector.model_dump()
+            except Exception as e:
+                logger.warning(f"Failed to generate ColumnSemanticVector for {p.column_name}: {e}")
+                col_semantic_vector_dict = None
+
             node = GraphNode(
                 column_name=p.column_name,
                 properties={
@@ -104,6 +129,7 @@ class EvidenceGraphBuilder:
                     "dataset_name": p.dataset_name,
                     "table_name": p.table_name,
                     "has_id_pattern": cls._detect_id_pattern(p.column_name),
+                    "column_semantic_vector": col_semantic_vector_dict,
                 }
             )
             nodes.append(node)
