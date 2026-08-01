@@ -3,6 +3,7 @@ import numpy as np
 import logging
 from typing import Dict, Any, List, Tuple
 from .report import TrustAuditReport
+from app.schema.trace_model import ExecutionTrace, TrustBreakdown
 
 logger = logging.getLogger(__name__)
 
@@ -136,15 +137,15 @@ class DataTrustEngine:
         )
 
         if trace is not None:
-            trace["trust_evaluation"] = {
-                "trust_score": trust_score,
-                "routing_decision": decision,
-                "total_rows": total_rows,
-                "quarantined_rows": len(quarantine_indices),
-                "dataset_errors": dataset_errors,
-                "row_errors": errors,
-                "warnings": warnings
-            }
+            trace.trust_evaluation = TrustBreakdown(
+                trust_score=trust_score,
+                routing_decision=decision,
+                total_rows=total_rows,
+                quarantined_rows=len(quarantine_indices),
+                dataset_errors=dataset_errors,
+                row_errors=errors,
+                warnings=warnings
+            )
 
         return self._build_trust_report(
             total_rows, trust_score, decision, quarantine_indices, warnings, errors, dataset_errors

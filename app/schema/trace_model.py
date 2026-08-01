@@ -42,3 +42,22 @@ class ExecutionTrace(BaseModel):
     reconciliation: Optional[ReconciliationTrace] = None
     saga: SagaTrace = Field(default_factory=SagaTrace)
     final_state: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        """兼容旧代码的 dict 输出"""
+        return self.model_dump(exclude_none=True)
+    
+    def to_json(self) -> str:
+        """序列化为 JSON"""
+        return self.model_dump_json(indent=2, exclude_none=True)
+    
+    @classmethod
+    def create(cls, batch_id: str, spec_id: str) -> "ExecutionTrace":
+        """工厂方法：创建新的 ExecutionTrace"""
+        return cls(
+            batch_id=batch_id,
+            spec_id=spec_id,
+            status="PASS",
+            compilation={"steps": []},
+            final_state="INIT"
+        )

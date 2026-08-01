@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.harness.report import TrustAuditReport
+from app.schema.trace_model import ReconciliationTrace, ExecutionTrace
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,12 @@ class ReconciliationEngine:
         if df.empty:
             return
         
-        self._trace = trace  # 保存到实例，供子方法使用
-        if self._trace is not None:
-            self._trace["reconciliation"] = {
-                "invariants_checked": [],
-                "violations": []
-            }
+        # 初始化 trace
+        if trace is not None:
+            trace.reconciliation = ReconciliationTrace(
+                invariants_checked=[],
+                violations=[]
+            )
 
         logger.info("[Layer 7] Commencing Deep Business Reconciliation...")
          
@@ -44,7 +45,7 @@ class ReconciliationEngine:
         row_rules = contracts.get("row_level_rules", [])
 
         # 1. 执行业务时间窗容忍度核销 (Time Window Tolerance)
-        self._reconcile_time_tolerance(df, audit_report, row_rules)
+        self._reconcile_time_tolerance(df, audit_report, row_rules, trace)
 
         # 2. 执行宏观/跨模块财务不变量对账 (Global Invariants)
         for inv in global_invariants:
@@ -64,27 +65,28 @@ class ReconciliationEngine:
             
             try:
                 if inv_type == "double_entry":
-                    self._reconcile_double_entry(df, audit_report, inv)
+                    self._reconcile_double_entry(df, audit_report, inv, trace)
                 elif inv_type == "line_sum_consistency":
-                    self._reconcile_line_sum(df, audit_report, inv)
+                    self._reconcile_line_sum(df, audit_report, inv, trace)
                 elif inv_type == "inventory_valuation":
-                    self._reconcile_inventory_valuation(df, audit_report, inv)
+                    self._reconcile_inventory_valuation(df, audit_report, inv, trace)
                 # [新增] 层级汇总核销
                 elif inv_type == "recursive_rollup":
-                    self._reconcile_recursive_rollup(df, audit_report, inv)
+                    self._reconcile_recursive_rollup(df, audit_report, inv, trace)
             except Exception as e:
                 logger.error(f"Reconciliation crashed on invariant '{inv_name}': {str(e)}")
                 self._flag_dataset_error(audit_report, inv_name, f"Reconciliation execution failure: {str(e)}")
+
 
         cross_rules = target_ontology.get("cross_entity_rules", [])
         for rule in cross_rules:
             rule_type = rule.get("type")
             if rule_type == "existence_check":
-                self._check_existence(df, audit_report, rule, extra_dataframes)
+                self._check_existence(df, audit_report, rule, extra_dataframes, trace)
 
         # 3. 基于对账结果重算信任分与路由决策
         self._re_evaluate_report(audit_report)
-        self._trace = None
+        # self._trace = None
 
 
     # ==========================================
@@ -92,14 +94,14 @@ class ReconciliationEngine:
     # 场景：源 POS 系统的 payment_date 是 6月15日，但银行实际 posting_date 是 6月17日。
     # 只要在设定的 3 天阈值内，对账引擎必须放行，决不能报错。
     # ==========================================
-    def _reconcile_time_tolerance(self, df: pd.DataFrame, report: TrustAuditReport, row_rules: List[Dict[str, Any]]):
+    def _reconcile_time_tolerance(self, df: pd.DataFrame, report: TrustAuditReport, row_rules: List[Dict[str, Any]], trace):
         for rule in row_rules:
             if rule.get("assertion") != "date_tolerance":
                 continue
 
             inv_name = f"date_tolerance_{rule.get('tolerance_window_days', 0)}d"
-            if self._trace is not None:
-                self._trace["reconciliation"]["invariants_checked"].append(inv_name)
+            if trace is not None:
+                trace.reconciliation.invariants_checked.append(inv_name)
                 
             col_source = rule.get("column")
             col_target = rule.get("target_column")
@@ -121,9 +123,8 @@ class ReconciliationEngine:
             violators = df[fail_mask].index.tolist()
 
             if violators:
-
-                if self._trace is not None:
-                    self._trace["reconciliation"]["violations"].append({
+                if trace is not None:
+                    trace.reconciliation.violations.append({
                         "invariant": inv_name,
                         "affected_rows": len(violators),
                         "details": f"Date drift exceeded {tolerance_days} days"
@@ -155,11 +156,11 @@ class ReconciliationEngine:
     # 场景：处理 Journal Entry 时，整个批次的借方 (Debit) 总计必须精确等于贷方 (Credit) 总计。
     # 任何 0.01 的浮点数逃逸都会导致此对账失败，从而阻断提交。
     # ==========================================
-    def _reconcile_double_entry(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any]):
+    def _reconcile_double_entry(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any], trace):
         inv_name = inv.get("name", "double_entry_invariant")
 
-        if self._trace is not None:
-            self._trace["reconciliation"]["invariants_checked"].append(inv_name)
+        if trace is not None:
+            trace.reconciliation.invariants_checked.append(inv_name)
         
         if 'debit' not in df.columns or 'credit' not in df.columns:
             logger.warning("Double-entry reconciliation skipped: Missing 'debit' or 'credit' columns.")
@@ -172,8 +173,8 @@ class ReconciliationEngine:
         if not np.isclose(total_debit, total_credit, atol=1e-4):
             variance = abs(total_debit - total_credit)
             msg = f"GL Balance mismatch! Total Debit: {total_debit:.2f}, Total Credit: {total_credit:.2f}. Variance: {variance:.4f}"
-            if self._trace is not None:
-                self._trace["reconciliation"]["violations"].append({
+            if trace is not None:
+                trace.reconciliation.violations.append({
                     "invariant": inv_name,
                     "details": msg,
                     "variance": variance
@@ -185,10 +186,10 @@ class ReconciliationEngine:
     # 对账策略 3：头行汇总一致性 (Line Sum Consistency)
     # 场景：销售单据头 (Header) 的 Total Amount 必须等于该单据下所有明细行 (Lines) 的 Amount 汇总。
     # ==========================================
-    def _reconcile_line_sum(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any]):
+    def _reconcile_line_sum(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any], trace):
         inv_name = inv.get("name", "line_sum_consistency")
-        if self._trace is not None:
-            self._trace["reconciliation"]["invariants_checked"].append(inv_name)
+        if trace is not None:
+            trace.reconciliation.invariants_checked.append(inv_name)
         
         if 'document_id' not in df.columns or 'total_amount' not in df.columns or 'line_amount' not in df.columns:
             return
@@ -203,11 +204,11 @@ class ReconciliationEngine:
         failed_docs = variance[variance > 1e-4].index.tolist()
 
         if failed_docs:
-            if self._trace is not None:
-                self._trace["reconciliation"]["violations"].append({
+            if trace is not None:
+                trace.reconciliation.violations.append({
                     "invariant": inv_name,
                     "affected_documents": len(failed_docs),
-                    "affected_rows": len(failed_indices)
+                    "affected_rows": len(df[df['document_id'].isin(failed_docs)].index)
                 })
             # 如果某张单据算不平，必须把该单据下的**所有行**一起打入隔离区，保证单据原子性
             failed_indices = df[df['document_id'].isin(failed_docs)].index.tolist()
@@ -253,14 +254,14 @@ class ReconciliationEngine:
                 error_penalty = (report.quarantined_rows_count / report.total_rows) * 1.0
                 report.trust_score = max(0.0, report.trust_score - error_penalty)
 
-    def _reconcile_recursive_rollup(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any]):
+    def _reconcile_recursive_rollup(self, df: pd.DataFrame, report: TrustAuditReport, inv: Dict[str, Any], trace):
         """
         递归对账 (BOM / Chart of Accounts)：
         断言：节点的汇总金额 (total_col) 必须严格等于 其自身金额 (value_col) + 所有直接子节点汇总金额之和 (children's total_col)
         """
         inv_name = inv.get("name", "recursive_rollup")
-        if self._trace is not None:
-            self._trace["reconciliation"]["invariants_checked"].append(inv_name)
+        if trace is not None:
+            trace.reconciliation.invariants_checked.append(inv_name)
 
         id_col = inv.get("id_column")
         parent_col = inv.get("parent_id_column")
@@ -288,8 +289,8 @@ class ReconciliationEngine:
         violators = df[~valid_mask].index.tolist()
 
         if violators:
-            if self._trace is not None:
-                self._trace["reconciliation"]["violations"].append({
+            if trace is not None:
+                trace.reconciliation.violations.append({
                     "invariant": inv_name,
                     "affected_rows": len(violators)
                 })
@@ -307,11 +308,12 @@ class ReconciliationEngine:
         df: pd.DataFrame,
         report: TrustAuditReport,
         rule: Dict[str, Any],
-        extra_dataframes: Dict[str, pd.DataFrame] = None
+        extra_dataframes: Dict[str, pd.DataFrame] = None,
+        trace: Optional[ExecutionTrace] = None
     ):
         name = rule.get("name", "existence_check")
-        if self._trace is not None:
-            self._trace["reconciliation"]["invariants_checked"].append(name)
+        if trace is not None:
+            trace.reconciliation.invariants_checked.append(name)
 
         source_entity = rule.get("source_entity")
         target_entity = rule.get("target_entity")
@@ -342,8 +344,8 @@ class ReconciliationEngine:
         invalid_mask = ~src_fk.isin(valid_ids)
         violators = df[invalid_mask].index.tolist()
         if violators:
-            if self._trace is not None:
-                self._trace["reconciliation"]["violations"].append({
+            if trace is not None:
+                trace.reconciliation.violations.append({
                     "invariant": name,
                     "foreign_key": foreign_key,
                     "affected_rows": len(violators)

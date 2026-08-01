@@ -18,6 +18,7 @@ from app.harness.report import TrustAuditReport
 from app.schema.ir_model import MappingSpec
 from app.ontology.schema_introspection import SchemaInspector
 from app.control.spec_repo import SpecRepository
+from app.schema.trace_model import ExecutionTrace, TrustBreakdown, ReconciliationTrace, SagaTrace
 from app.execution.state_machine import BatchLifecycle, BatchState
 from app.execution.reconciliation import ReconciliationEngine
 from app.execution.saga_manager import SagaManager
@@ -36,10 +37,9 @@ class PipelineOrchestrator:
         spec_governor: Optional[SpecGovernor] = None,
         evidence_graph: Optional[EvidenceGraph] = None
     ):
-        # self.mapper = SemanticMapper(llm_client)
         self.compiler = IRCompiler()
         self.enforcer = DataTrustEngine() 
-        self.reconciler = ReconciliationEngine() # Layer 7
+        self.reconciler = ReconciliationEngine()
         self.db_writer = SQLiteWriter(db_path=db_path) 
         self.saga_manager = SagaManager(db_writer=self.db_writer)
         self.mapping_planner = mapping_planner
@@ -54,18 +54,14 @@ class PipelineOrchestrator:
         target_ontology: Dict[str, Any],
         reference_data: Dict[str, pd.Series] = None,
         extra_dataframes: Dict[str, pd.DataFrame] = None,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport, BatchLifecycle]:
+        evidence_graph: Optional[Any] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, TrustAuditReport, BatchLifecycle, ExecutionTrace]:
         
         batch_id = f"BATCH-{uuid.uuid4().hex[:8].upper()}"
         lifecycle = BatchLifecycle(batch_id, active_spec.spec_id)
 
-        trace = {
-            "batch_id": batch_id,
-            "spec_id": active_spec.spec_id,
-            "start_time": datetime.now(timezone.utc).isoformat(),
-            "compilation": {"steps": []},
-            "status": "PASS"  # 临时
-        }
+        trace = ExecutionTrace.create(batch_id=batch_id, spec_id=active_spec.spec_id)
+        trace.start_time = datetime.now(timezone.utc)
 
         logger.info("--- 🚀 Starting Stateful Execution Plane | Batch: {batch_id} ---")
         
@@ -87,7 +83,7 @@ class PipelineOrchestrator:
         lifecycle.transition_to(BatchState.COMPILED, "Vectorized compilation finished.")
 
         # State: COMPILED -> RECONCILED
-        logger.info("[Execution Plane] Evaluating Trust Score (Layer 5-P2) and Forensic ODCS Contracts...")
+        logger.info("[Execution Plane] Evaluating Trust Score...")
         audit_report: TrustAuditReport = self.enforcer.evaluate(
             compiled_df=compiled_df, 
             target_ontology=target_ontology,
@@ -110,11 +106,15 @@ class PipelineOrchestrator:
                 logger.info("[Layer 8] Attempting Database Commit...")
                 self.db_writer.commit(clean_df, target_ontology["dataset_name"], batch_id)
                 lifecycle.transition_to(BatchState.COMMITTED, "Physical DB Commit Successful.")
+                trace.status = "PASS"
+                trace.final_state = "COMMITTED"
                 
             except Exception as e:
                 logger.error(f"🚨 FATAL: Database commit failed mid-way! Triggering Saga Compensation. Error: {str(e)}")
                 lifecycle.transition_to(BatchState.COMPENSATING, f"DB Crash: {str(e)}")
-                
+                trace.status = "FAILED"
+                trace.final_state = "COMPENSATING"
+
                 # 触发 Saga 逆向冲销
                 self.saga_manager.execute_compensation(clean_df, active_spec, target_ontology, trace=trace)
                 
@@ -125,6 +125,8 @@ class PipelineOrchestrator:
                 clean_df = pd.DataFrame(columns=clean_df.columns)
         else:
             lifecycle.transition_to(BatchState.QUARANTINED, f"Low Trust Score: {audit_report.trust_score}")
+            trace.status = "QUARANTINE"
+            trace.final_state = "QUARANTINED"
             logger.warning("⚠️ Batch Quarantined. Generating async feedback for Control Plane...")
             
             if not quarantine_df.empty and self.mapping_planner and self.spec_governor:
@@ -169,6 +171,9 @@ class PipelineOrchestrator:
                     logger.info(f"🔄 Auto-generated patch spec {patch_spec.spec_id} based on failure context.")
                 except Exception as e:
                     logger.error(f"Failed to auto-generate patch: {e}")
+
+        # 记录结束时间
+        trace.end_time = datetime.now(timezone.utc)
 
         return clean_df, quarantine_df, audit_report, lifecycle, trace
 

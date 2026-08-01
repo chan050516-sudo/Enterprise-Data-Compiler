@@ -5,6 +5,7 @@ from typing import Dict, Any
 from app.schema.ir_model import MappingSpec
 from app.execution.inverse_compiler import InverseCompiler
 from app.output.sqlite_writer import TargetDBWriter
+from app.schema.trace_model import ExecutionTrace, SagaTrace
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,11 @@ class SagaManager:
             if trace is not None:
                 # 将 reversal_df 转为 dict 列表（注意处理 NaN）
                 records = reversal_df.where(pd.notna(reversal_df), None).to_dict(orient='records')
-                trace["saga"] = {
-                    "triggered": True,
-                    "reversal_records": records,
-                    "reversal_rows": len(records)
-                }
+                trace.saga = SagaTrace(
+                    triggered=True,
+                    reversal_records=records[:100],
+                    reversal_rows=len(records)
+                )
                 
             # 2. 将冲销数据打入死信/应急通道写入目标库
             # 这里的 fallback_commit 使用了独立事务或紧急 API 接口

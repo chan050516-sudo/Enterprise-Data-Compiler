@@ -346,11 +346,13 @@ def main():
             # 保存执行结果
             trace_file = os.path.join(os.path.dirname(args.csv_out), f"trace_{trace['batch_id']}.json")
             with open(trace_file, 'w', encoding='utf-8') as f:
-                json.dump(trace, f, indent=2, default=str)
+                f.write(trace.to_json())
             
             logger.info("📊 Execution Trace Summary:")
-            logger.info(f"  Batch ID: {trace['batch_id']}")
-            logger.info(f"  Final state: {lifecycle.current_state.value}")
+            logger.info(f"  Batch ID: {trace.batch_id}")
+            logger.info(f"  Status: {trace.status}")
+            logger.info(f"  Final State: {trace.final_state}")
+            logger.info(f"  Compilation steps: {len(trace.compilation.get('steps', []))}")
             
             if audit_report.routing_decision == "PASS" and lifecycle.current_state == BatchState.COMMITTED:
                 logger.info("✅ Pipeline Decision: PASS")
