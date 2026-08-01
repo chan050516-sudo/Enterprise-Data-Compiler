@@ -1,67 +1,120 @@
 enterprise-data-compiler/
 │
-├── README.md                  # 项目定义已升级为：AI-driven Data Compiler 
-├── requirements.txt           # 清除了原有沙盒可能需要的进程间通信或底层隔离库 
-├── .env                       # 仅保留基础的 LLM API 密钥与环境变量 
+├── README.md 
+├── requirements.txt
+├── .env
 │
 ├── app/ 
-│   ├── main.py                # 整个编译系统的 CLI 入口 
 │
 │   ├── config/ 
-│   │   └── settings.py        # 包含算子白名单、类型契约等全局静态配置 
+│   │   └── settings.py
 │
-│   ├── chaos/
-│   │   ├── engine.py 
-│   │   ├── noise_injector.py 
-│   │   ├── pandera_breaker.py
-│   │   ├── semantic_drifter.py
-│   │   └── benchmark_metrics.py 
-│
-│   ├── connectors/            # Layer 1: 确定性数据读入 
+│   ├── connectors/
 │   │   ├── base.py 
 │   │   ├── csv_connector.py 
 │   │   └── excel_connector.py 
 │
-│   ├── schema/                # Layer 2: 输入源结构属性感知 
-│   │   ├── semantic_profiler.py 
-│   │   ├── schema_model.py    # 提取源头 Meta 描述 
-│   │   └── ir_model.py        # 【核心资产】Transformation IR 语法树契约
+│   ├── control/
+│   │   ├── governor.py 
+│   │   ├── spec_repo.py 
+│   │   └── wave_orchestrator.py 
 │
-│   ├── ontology/              # Layer 3: STATIC 目标企业业务模型 
+│   ├── execution/
+│   │   ├── inverse_compiler.py 
+│   │   ├── orchestrator.py 
+│   │   ├── reconciliation.py
+│   │   ├── saga_manager.py 
+│   │   └── state_machine.py 
+│
+│   ├── harness/
+│   │   ├── ir_validator.py
+│   │   ├── trust_engine.py
+│   │   └── report.py
+│
+│   ├── knowledge/
+│   │   └── knowledge_base.py
+│
+│   ├── llm/ 
+│   │   ├── llm_client.py 
+│   │   ├── mapping_planner.py
+│   │   └── prompt_templates.py [cite: 3]
+│
+│   ├── mapping/
+│   │   ├── __init__.py 
+│   │   └── orchestrator.py
+│
+│   ├── metadata/ 
+│   │   ├── provider.py 
+│   │   └── providers/
+│   │       ├── __init__.py
+│   │       ├── dbsurveyor_provider.py
+│   │       ├── ddl_provider.py
+│   │       ├── jdbc_provider.py
+│   │       └── manual_provider.py
+│
+│   ├── naming/
+│   │   ├── prompt_builder.py 
+│   │   └── semnatic_interpreter.py
+│
+│   ├── normalizer/
+│   │   └── technical_normalizer.py
+│
+│   ├── ontology/
 │   │   ├── business_schema.py 
-│   │   └── ontology_registry.json 
+│   │   ├── canoncial_ontology.json
+│   │   ├── mapping_registry.json
+│   │   ├── mapping_registry.py
+│   │   ├── ontology_registry.json
+│   │   ├── schema_introspection.py 
+│   │   └── adapters/
+│   │       └── base.py
 │
-│   ├── llm/                   # Layer 4: 语义映射器（仅输出标准 IR JSON） 
-│   │   ├── mapper.py 
-│   │   ├── prompt_templates.py # 【核心资产】反向强约束大模型的规范 Prompt [cite: 2]
-│   │   └── llm_client.py [cite: 3]
+│   ├── output/
+│   │   ├── exporter.py
+│   │   └── sqlite_writer.py
 │
-│   ├── harness/               # Layer 5: 两阶段核心安全防线 
-│   │   ├── ir_validator.py    # 【Phase 1】IR 静态拓扑校验器（拦截字段幻觉与未知算子）
-│   │   ├── trust_engine.py   # 【Phase 2】 
-│   │   └── report.py          # 编译质量综合评估报告 
+│   ├── reasoning/
+│   │   ├── constraint_engine.py 
+│   │   ├── engine.py 
+│   │   ├── evidence_fushion.py
+│   │   └── likelihood.py 
 │
-│   ├── runtime/               # Layer 6: 本地确定性数据编译器 
-│   │   └── compiler.py        # 【核心资产】纯向量化算子流转引擎，彻底替代原 Sandbox 
+│   ├── resolution/
+│   │   ├── __init__.py 
+│   │   ├── base.py 
+│   │   ├── registry.py
+│   │   └── operators/
+│   │       ├── exact_lookup.py 
+│   │       ├── hdbscan_cluster.py
+│   │       ├── human_review.py 
+│   │       └── similarity_match.py
 │
-│   ├── review/                # Layer 7: 人工介入复核层 [cite: 4]
-│   │   ├── review_engine.py   # 处理隔离区数据的审批、重修与回流 [cite: 4]
-│   │   └── quarantine_viewer.py # 脏数据/异常映射可视化 [cite: 4]
+│   ├── review/
+│   │   ├── review_engine.py
+│   │   └── quarantine_viewer.py
 │
-│   ├── output/                # Layer 8: 目标存储写入 [cite: 4]
-│   │   ├── exporter.py [cite: 4]
-│   │   └── sqlite_writer.py   # 安全持久化至企业 ERP 数据库（SQLite 镜像） [cite: 4]
+│   ├── runtime/
+│   │   └── compiler.py
 │
-│   ├── pipeline/ 
-│   │   └── orchestrator.py    # 全局调度中枢：串联加载、图检查、编译与数据审计 
+│   ├── schema/
+│   │   ├── column_embedding_vector.py 
+│   │   ├── constraint.py 
+│   │   ├── evidence_graph_ir.py
+│   │   ├── evidence.py
+│   │   ├── hypothesis_ir.py 
+│   │   ├── ir_model.py
+│   │   ├── normalization_model.py 
+│   │   ├── profile_ir.py 
+│   │   ├── resolution.py
+│   │   ├── semantic_evidence.py
+│   │   ├── semantic_profiler.py
+│   │   ├── target_knowledge_ir.py 
+│   │   ├── target_schema_introspector.py
+│   │   ├── trace_model.py 
+│   │   └── wave_model.py 
 │
-│ tests/ 
-│   ├── test_mapping.py        # 验证 LLM 映射 IR 的准确度 
-│   ├── test_harness.py        # 专门针对恶意/幻觉 IR 的静态拦截测试 
-│   └── sample_data/ [cite: 5]
-│       ├── messy.csv
-│       └── target_schema.json
+│   ├── main.py
+│
+├── tests/ 
 │
 └── demo/
-    ├── run_demo.py
-    └── demo_dataset.csv

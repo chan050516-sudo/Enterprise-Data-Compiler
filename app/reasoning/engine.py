@@ -5,10 +5,12 @@ from typing import List, Dict, Set, Optional, Any
 from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope
 from app.schema.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisStatus, HypothesisType
+from app.schema.resolution import ResolutionPlan, ResolutionLoop, ResolutionStatus, ResolutionOperatorType
 from app.reasoning.evidence_fusion import EvidenceFusion
 from app.schema.constraint import ConstraintViolation
 from app.reasoning.likelihood import LikelihoodProvider, RuleBasedLikelihoodProvider, softmax
 from app.reasoning.constraint_engine import ConstraintEngine
+from app.resolution.registry import ResolutionOperatorRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +29,18 @@ class ReasoningEngine:
     MAX_ITERATIONS = 20
     CONVERGENCE_THRESHOLD = 0.02
     MIN_EVIDENCE_WEIGHT = 1e-6
+    RESOLUTION_CONFIDENCE_TARGET = 0.85
     
     def __init__(self, likelihood_provider: Optional[LikelihoodProvider] = None):
         self.likelihood_provider = likelihood_provider or RuleBasedLikelihoodProvider()
         self.raw_evidence: List[Evidence] = []
         self.derived_evidence: List[Evidence] = []
         self.constraint_evidence: List[Evidence] = []
+        self.resolution_loops: List[ResolutionLoop] = []
         self._log_prior = 0.0  # 默认先验对数
     
-    def reason(self,
+    def reason(
+        self,
         graph: EvidenceGraph,
         initial_pool: Optional[HypothesisPool] = None,
         additional_evidences: Optional[List[Evidence]] = None
@@ -90,8 +95,14 @@ class ReasoningEngine:
                 logger.info(f"  - Derived evidences: {len(derived_evidences)}")
                 evidence_pool.extend(derived_evidences)
                 self.derived_evidence.extend(derived_evidences)
+
+            # 3.5 Resolution Loop
+            resolution_evidences = self._run_resolution_loop(pool, graph, evidence_pool)
+            if resolution_evidences:
+                logger.info(f"  - Resolution evidences: {len(resolution_evidences)}")
+                evidence_pool.extend(resolution_evidences)
             
-            # 3.5 收敛检查
+            # 3.6 收敛检查
             if self._check_convergence(pool):
                 logger.info(f"Converged after {pool.iteration} iterations.")
                 pool.converged = True
@@ -102,6 +113,289 @@ class ReasoningEngine:
         
         logger.info(f"Final: {len([h for h in pool.get_confirmed() if h.type == HypothesisType.ENTITY])} entities")
         return pool
+
+
+    # ============================================================
+    # 新增：Resolution Loop 核心逻辑
+    # ============================================================
+    
+    def _run_resolution_loop(
+        self,
+        pool: HypothesisPool,
+        graph: EvidenceGraph,
+        evidence_pool: List[Evidence]
+    ) -> List[Evidence]:
+        """
+        执行 Resolution Loop
+        
+        流程：
+        1. 检查哪些假设需要 Resolution（低置信度）
+        2. 生成 Resolution Plan
+        3. 循环执行 Operator 直到置信度达标或达到最大迭代
+        """
+        # 1. 检测需要 Resolution 的假设
+        candidates = self._detect_resolution_candidates(pool)
+        if not candidates:
+            return []
+        
+        all_evidences = []
+        
+        for hypothesis_id in candidates:
+            plan = self._generate_resolution_plan(pool, hypothesis_id)
+            if not plan:
+                continue
+            
+            loop = ResolutionLoop(
+                id=f"LOOP-{uuid.uuid4().hex[:6]}",
+                hypothesis_id=hypothesis_id,
+                current_confidence=self._get_hypothesis_confidence(pool, hypothesis_id),
+                target_confidence=self.RESOLUTION_CONFIDENCE_TARGET,
+                max_iterations=plan.max_iterations
+            )
+            
+            # 2. 执行 Resolution Loop
+            while loop.should_continue():
+                loop.iteration += 1
+                logger.info(f"    Resolution Loop {loop.id}, iteration {loop.iteration}")
+                
+                # 执行当前计划
+                evidences = self._execute_resolution_plan(plan, pool, graph, loop)
+                
+                if evidences:
+                    loop.evidence_history.extend([e.dict() for e in evidences])
+                    all_evidences.extend(evidences)
+                    
+                    # 更新假设
+                    for ev in evidences:
+                        self._update_hypothesis_from_evidence(pool, ev)
+                    
+                    # 更新循环状态
+                    loop.current_confidence = self._get_hypothesis_confidence(pool, hypothesis_id)
+                    loop.plan_history.append(plan)
+                    
+                    # 如果置信度达标，退出循环
+                    if loop.current_confidence >= loop.target_confidence:
+                        loop.status = ResolutionStatus.CONFIRMED
+                        break
+                
+                # 如果置信度不足且还有迭代，尝试新的 Operator
+                if loop.should_continue():
+                    plan = self._plan_next_operator(pool, hypothesis_id, loop)
+            
+            # 循环结束
+            if loop.can_escalate_to_human():
+                loop.status = ResolutionStatus.NEEDS_REVIEW
+                # 生成人工审核 Evidence
+                human_ev = self._escalate_to_human(pool, hypothesis_id, loop)
+                if human_ev:
+                    all_evidences.append(human_ev)
+            
+            self.resolution_loops.append(loop)
+        
+        return all_evidences
+    
+    def _detect_resolution_candidates(self, pool: HypothesisPool) -> List[str]:
+        """
+        检测需要 Resolution 的假设
+        
+        条件：
+        1. 假设是 ACTIVE 状态
+        2. 置信度低于目标阈值
+        3. 假设类型是 ENTITY 或 RELATIONSHIP
+        """
+        candidates = []
+        for h in pool.hypotheses:
+            if h.status not in [HypothesisStatus.ACTIVE, HypothesisStatus.PROPOSED]:
+                continue
+            if h.type not in [HypothesisType.ENTITY, HypothesisType.RELATIONSHIP]:
+                continue
+            if h.confidence < self.RESOLUTION_CONFIDENCE_TARGET * 0.8:
+                candidates.append(h.id)
+        return candidates
+    
+    def _generate_resolution_plan(
+        self,
+        pool: HypothesisPool,
+        hypothesis_id: str
+    ) -> Optional[ResolutionPlan]:
+        """
+        生成 Resolution Plan
+        
+        根据假设类型和内容动态生成策略
+        """
+        hypothesis = self._find_hypothesis(pool, hypothesis_id)
+        if not hypothesis:
+            return None
+        
+        # 根据类型选择 Operator
+        if hypothesis.type == HypothesisType.ENTITY:
+            operators = [
+                ResolutionOperatorType.EXACT_LOOKUP,
+                ResolutionOperatorType.SIMILARITY_MATCH,
+                ResolutionOperatorType.HDBSCAN_CLUSTER,
+                ResolutionOperatorType.HUMAN_REVIEW
+            ]
+        elif hypothesis.type == HypothesisType.RELATIONSHIP:
+            operators = [
+                ResolutionOperatorType.EXACT_LOOKUP,
+                ResolutionOperatorType.SIMILARITY_MATCH,
+                ResolutionOperatorType.HUMAN_REVIEW
+            ]
+        else:
+            operators = [ResolutionOperatorType.HUMAN_REVIEW]
+        
+        return ResolutionPlan(
+            id=f"PLAN-{uuid.uuid4().hex[:6]}",
+            target_type=self._infer_target_type(hypothesis),
+            input_hypothesis_ids=[hypothesis_id],
+            operators=operators,
+            thresholds={"exact_threshold": 0.85, "fuzzy_threshold": 0.75},
+            confidence_target=self.RESOLUTION_CONFIDENCE_TARGET,
+            max_iterations=3
+        )
+    
+    def _infer_target_type(self, hypothesis: Hypothesis) -> str:
+        """推断 Resolution 目标类型"""
+        if hypothesis.type == HypothesisType.ENTITY:
+            return "key"
+        elif hypothesis.type == HypothesisType.RELATIONSHIP:
+            return "fk"
+        return "record"
+    
+    def _execute_resolution_plan(
+        self,
+        plan: ResolutionPlan,
+        pool: HypothesisPool,
+        graph: EvidenceGraph,
+        loop: ResolutionLoop
+    ) -> List[Evidence]:
+        """执行 Resolution Plan 中的下一个 Operator"""
+        if loop.iteration > len(plan.operators):
+            return []
+        
+        op_type = plan.operators[loop.iteration - 1]
+        operator = ResolutionOperatorRegistry.get(op_type)
+        if not operator:
+            logger.warning(f"Operator {op_type} not registered")
+            return []
+        
+        # 构建执行上下文
+        hypothesis = self._find_hypothesis(pool, loop.hypothesis_id)
+        if not hypothesis:
+            return []
+        
+        kwargs = {
+            "plan": plan,
+            "hypothesis": hypothesis,
+            "pool": pool,
+            "graph": graph,
+            "source_column": hypothesis.content.get("columns", [None])[0] if hypothesis.content.get("columns") else None,
+        }
+        
+        # 尝试执行
+        try:
+            return operator.execute(plan, **kwargs)
+        except Exception as e:
+            logger.error(f"Operator {op_type} execution failed: {e}")
+            return []
+    
+    def _plan_next_operator(
+        self,
+        pool: HypothesisPool,
+        hypothesis_id: str,
+        loop: ResolutionLoop
+    ) -> ResolutionPlan:
+        """生成下一个 Operator 的计划"""
+        # 简单实现：使用同一计划的下一阶段
+        last_plan = loop.plan_history[-1] if loop.plan_history else None
+        if last_plan:
+            # 尝试不同的 Operator
+            used_ops = set()
+            for p in loop.plan_history:
+                for op in p.operators:
+                    used_ops.add(op)
+            
+            all_ops = [
+                ResolutionOperatorType.EXACT_LOOKUP,
+                ResolutionOperatorType.SIMILARITY_MATCH,
+                ResolutionOperatorType.HDBSCAN_CLUSTER,
+                ResolutionOperatorType.HUMAN_REVIEW
+            ]
+            
+            next_ops = [op for op in all_ops if op not in used_ops]
+            if next_ops:
+                return ResolutionPlan(
+                    id=f"PLAN-{uuid.uuid4().hex[:6]}",
+                    target_type=last_plan.target_type,
+                    input_hypothesis_ids=[hypothesis_id],
+                    operators=next_ops[:1],
+                    thresholds=last_plan.thresholds,
+                    confidence_target=self.RESOLUTION_CONFIDENCE_TARGET,
+                    max_iterations=1
+                )
+        
+        # 降级：人工审核
+        return ResolutionPlan(
+            id=f"PLAN-HUMAN-{uuid.uuid4().hex[:6]}",
+            target_type="record",
+            input_hypothesis_ids=[hypothesis_id],
+            operators=[ResolutionOperatorType.HUMAN_REVIEW],
+            thresholds={},
+            confidence_target=0.5,
+            max_iterations=1
+        )
+    
+    def _escalate_to_human(
+        self,
+        pool: HypothesisPool,
+        hypothesis_id: str,
+        loop: ResolutionLoop
+    ) -> Optional[Evidence]:
+        """升级到人工审核"""
+        hypothesis = self._find_hypothesis(pool, hypothesis_id)
+        if not hypothesis:
+            return None
+        
+        return Evidence(
+            id=f"EVID-HUMAN-{uuid.uuid4().hex[:6]}",
+            type="human_review_required",
+            source=f"resolution_loop_{loop.id}",
+            target=hypothesis_id,
+            value=0.5,
+            metadata={
+                "hypothesis": hypothesis.dict(),
+                "loop_history": [p.dict() for p in loop.plan_history],
+                "evidence_history": loop.evidence_history,
+                "current_confidence": loop.current_confidence,
+                "reason": "Resolution loop exhausted, requires human review"
+            },
+            reliability=0.3
+        )
+    
+    def _update_hypothesis_from_evidence(self, pool: HypothesisPool, evidence: Evidence):
+        """根据新证据更新假设"""
+        hypothesis = self._find_hypothesis(pool, evidence.target)
+        if not hypothesis:
+            return
+        
+        # 简单更新：根据证据值调整置信度
+        if evidence.type in ["exact_match_rate", "similarity_match", "fk_value_resolution"]:
+            # 置信度更新
+            new_confidence = 0.6 * hypothesis.confidence + 0.4 * evidence.value
+            hypothesis.confidence = min(1.0, new_confidence)
+            hypothesis.confidence_history.append((hypothesis.confidence, f"evidence_{evidence.id}"))
+    
+    def _find_hypothesis(self, pool: HypothesisPool, hypothesis_id: str) -> Optional[Hypothesis]:
+        """查找假设"""
+        for h in pool.hypotheses:
+            if h.id == hypothesis_id:
+                return h
+        return None
+    
+    def _get_hypothesis_confidence(self, pool: HypothesisPool, hypothesis_id: str) -> float:
+        """获取假设置信度"""
+        h = self._find_hypothesis(pool, hypothesis_id)
+        return h.confidence if h else 0.0
 
     
     # ============================================================
