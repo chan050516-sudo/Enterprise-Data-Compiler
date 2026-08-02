@@ -49,6 +49,32 @@ class ColumnProfileIR(BaseModel):
         default=None,
         description="列的信息熵，衡量值的多样性"
     )
+
+    # ========== 新增：技术形态学特征 ==========
+    numeric_density: Optional[float] = Field(
+        default=None,
+        description="数字字符占比（采样均值）"
+    )
+    length_std: Optional[float] = Field(
+        default=None,
+        description="字符串长度标准差"
+    )
+    separator_profile: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="分隔符及其出现频率，如 {'-': 0.8, '/': 0.1}"
+    )
+    decimal_place_mode: Optional[int] = Field(
+        default=None,
+        description="出现频率最高的小数位数（对数值字符串）"
+    )
+    value_fingerprint_clusters: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="指纹聚类结果：{fingerprint: count}"
+    )
+    cluster_coverage: Optional[float] = Field(
+        default=None,
+        description="指纹聚类覆盖率（总行数/聚类后总频次）"
+    )
     
     # ---------- 内部缓存（用于关系计算，不序列化） ----------
     _value_set: Optional[Set[Any]] = None

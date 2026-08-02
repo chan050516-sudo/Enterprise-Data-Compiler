@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import math
 import logging
+import re
+from collections import Counter
 from typing import Dict, Any, List, Optional
 from app.schema.profile_ir import ColumnProfileIR
 
@@ -118,7 +120,22 @@ class SemanticProfiler:
             # 6. 样本（保留前 5 个非空）
             samples = valid_series.head(5).tolist() if valid_count > 0 else []
 
-            # 7. 构建 Profile 对象（注入所有新字段）
+            # ===== [新增] 提取形态学特征（仅对字符串列有意义） =====
+            morph_features = {}
+            if data_type == "string_or_categorical" and valid_count > 0:
+                morph_features = cls._extract_morphological_features(valid_series)
+            else:
+                # 数值列或空列，填充默认值
+                morph_features = {
+                    'numeric_density': 0.0,
+                    'length_std': 0.0,
+                    'separator_profile': {},
+                    'decimal_place_mode': None,
+                    'value_fingerprint_clusters': {},
+                    'cluster_coverage': 0.0,
+                }
+
+            # 构建 Profile 对象（注入所有新字段）
             profile = ColumnProfileIR(
                 column_name=col,
                 dataset_name=dataset_name,
@@ -140,12 +157,124 @@ class SemanticProfiler:
                 samples=samples,
                 candidate_types=candidate_types,       # 新增
                 entropy=entropy,
+                numeric_density=morph_features['numeric_density'],
+                length_std=morph_features['length_std'],
+                separator_profile=morph_features['separator_profile'],
+                decimal_place_mode=morph_features['decimal_place_mode'],
+                value_fingerprint_clusters=morph_features['value_fingerprint_clusters'],
+                cluster_coverage=morph_features['cluster_coverage'],
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )
             profiles.append(profile)
         
         logger.info(f"Generated {len(profiles)} column profiles.")
         return profiles
+
+    # [新增] 核心形态学特征提取器
+    @classmethod
+    def _extract_morphological_features(cls, series: pd.Series) -> Dict[str, Any]:
+        """
+        从一列中提取技术形态学特征（不依赖列名）。
+        返回字典，包含：
+        - numeric_density: float，数字字符占比
+        - length_std: float，字符串长度标准差
+        - separator_profile: Dict[str, float]，分隔符频率
+        - decimal_place_mode: Optional[int]，众数小数位数
+        - value_fingerprint_clusters: Dict[str, int]，指纹聚类结果
+        - cluster_coverage: float，聚类覆盖率
+        """
+        sample = series.dropna().astype(str)
+        if len(sample) == 0:
+            return {
+                'numeric_density': 0.0,
+                'length_std': 0.0,
+                'separator_profile': {},
+                'decimal_place_mode': None,
+                'value_fingerprint_clusters': {},
+                'cluster_coverage': 0.0,
+            }
+
+        # ----- 1. 数字密度 -----
+        # 统计数字字符数 / 总字符数
+        digit_counts = sample.str.count(r'\d')
+        total_chars = sample.str.len()
+        valid_mask = total_chars > 0
+        if valid_mask.sum() > 0:
+            avg_digit_ratio = (digit_counts[valid_mask] / total_chars[valid_mask]).mean()
+        else:
+            avg_digit_ratio = 0.0
+        numeric_density = round(float(avg_digit_ratio), 4) if not pd.isna(avg_digit_ratio) else 0.0
+
+        # ----- 2. 长度标准差 -----
+        lengths = sample.str.len()
+        length_std = round(float(lengths.std()), 2) if len(lengths) > 1 else 0.0
+
+        # ----- 3. 分隔符画像 (统计 - / . _ 空格 等) -----
+        sep_chars = '-/._ '
+        sep_counter = Counter()
+        for s in sample.head(200):  # 仅取前200个，避免超大开销
+            for ch in s:
+                if ch in sep_chars:
+                    sep_counter[ch] += 1
+        total_sep = sum(sep_counter.values())
+        if total_sep > 0:
+            sep_profile = {k: round(v/total_sep, 4) for k, v in sep_counter.items() if v/total_sep > 0.03}
+        else:
+            sep_profile = {}
+
+        # ----- 4. 小数位数众数 (仅对看起来像数字的字符串) -----
+        decimal_counts = []
+        for s in sample.head(200):
+            # 移除货币符号和千位分隔符，只保留数字和点
+            cleaned = re.sub(r'[^\d.]', '', s.replace(',', ''))
+            if '.' in cleaned:
+                decimal_counts.append(len(cleaned.split('.')[1]))
+            elif cleaned.isdigit():
+                decimal_counts.append(0)
+        if decimal_counts:
+            decimal_place_mode = Counter(decimal_counts).most_common(1)[0][0]
+        else:
+            decimal_place_mode = None
+
+        # ----- 5. 指纹聚类 (OpenRefine 风格，仅当基数较低时触发) -----
+        unique_ratio = sample.nunique() / len(sample) if len(sample) > 0 else 1.0
+        clusters = {}
+        cluster_coverage = 0.0
+        
+        # 如果唯一率 < 15%，说明很可能是枚举或代码，进行指纹聚类
+        if unique_ratio < 0.15 and len(sample) > 10:
+            def fingerprint(s):
+                # 1. 小写
+                s = s.lower()
+                # 2. 去除所有非字母数字字符（转换为空格）
+                s = re.sub(r'[^a-z0-9]', ' ', s)
+                # 3. 分词、去单字符、排序
+                tokens = [t for t in s.split() if len(t) > 1]
+                tokens.sort()
+                return ' '.join(tokens)
+            
+            # 生成所有指纹
+            fingerprints = sample.apply(fingerprint)
+            # 统计频次
+            cluster_counts = fingerprints.value_counts()
+            # 只保留出现次数 > 1 的簇（真正的枚举合并）
+            for fp, cnt in cluster_counts.items():
+                if cnt > 1:
+                    clusters[fp] = int(cnt)
+            total_clustered = sum(clusters.values())
+            cluster_coverage = round(total_clustered / len(sample), 4) if len(sample) > 0 else 0.0
+        else:
+            clusters = {}
+            cluster_coverage = 0.0
+
+        return {
+            'numeric_density': numeric_density,
+            'length_std': length_std,
+            'separator_profile': sep_profile,
+            'decimal_place_mode': decimal_place_mode,
+            'value_fingerprint_clusters': clusters,
+            'cluster_coverage': cluster_coverage,
+        }
 
     @classmethod
     def _compute_entropy(cls, series: pd.Series) -> Optional[float]:

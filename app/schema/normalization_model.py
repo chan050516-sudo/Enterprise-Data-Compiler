@@ -21,7 +21,8 @@ class NormalizationReport(BaseModel):
     total_rows: int = 0
     total_columns: int = 0
     columns_processed: List[ColumnNormalizationReport] = Field(default_factory=list)
-
+    detected_type: Optional[str] = None
+    detection_confidence: Optional[float] = None
     currency_units_extracted: Dict[str, int] = Field(
         default_factory=dict, 
         description="提取到的货币单位及其出现次数，例如 {'RM': 150, 'USD': 20}"

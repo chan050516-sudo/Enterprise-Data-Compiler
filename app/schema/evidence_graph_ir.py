@@ -8,8 +8,8 @@ class EdgeType(str, Enum):
     SIMILAR_TO = "similar_to"
     POSSIBLE_FK = "possible_fk"
     SAME_ATTRIBUTE = "same_attribute"
-    # DERIVED_FROM = "derived_from"
     CO_OCCURS_WITH = "co_occurs_with"
+    FUNCTIONAL_DEPENDENCY = "functional_dependency"
 
 class EvidenceDetail(BaseModel):
     """支撑一条边的多重证据（完整版）"""
@@ -29,6 +29,16 @@ class EvidenceDetail(BaseModel):
     datatype_compatibility: Optional[float] = None       # 数据类型兼容性 (numeric~numeric=1, string~string=1)
     co_occurrence_score: Optional[float] = None          # 同表/同数据集共现强度
 
+    # ---------- 新增：形态学证据 ----------
+    format_similarity: Optional[float] = Field(
+        default=None,
+        description="格式模板相似度（如 DDD-DD vs DDD-DD）"
+    )
+    cluster_overlap: Optional[float] = Field(
+        default=None,
+        description="枚举簇重叠度"
+    )
+    
     # ---------- 未来扩展：Sketch 近似（占位） ----------
     minhash_similarity: Optional[float] = None           # MinHash 近似 Jaccard
     hll_cardinality_ratio: Optional[float] = None        # HyperLogLog 基数比

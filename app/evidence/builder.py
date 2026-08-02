@@ -39,14 +39,15 @@ class EvidenceGraphBuilder:
     # 综合证据权重（用于边置信度融合）
     # 注意：越可靠的证据权重越高，容易误导的证据权重较低
     EVIDENCE_WEIGHTS = {
-        "fd_confidence": 0.30,       # 函数依赖，最可靠
-        "inclusion": 0.25,           # 包含依赖，FK 核心证据
-        "value_jaccard": 0.20,       # 值集合 Jaccard，属性匹配证据
-        "name_similarity": 0.10,     # 列名相似，辅助证据
-        "datatype": 0.05,            # 类型兼容，弱证据
-        "distribution": 0.05,        # 分布相似，易误判，权重低
-        "null_pattern": 0.05,        # 空值模式，易误判，权重低
-        # "co_occurrence": 0.10,     同属数据集/表，基础证据（已根据上下文动态调整）
+        "fd_confidence": 0.25,       # 函数依赖，最可靠
+        "inclusion": 0.20,           # 包含依赖，FK 核心证据
+        "value_jaccard": 0.15,       # 值集合 Jaccard，属性匹配证据
+        "name_similarity": 0.08,     # 列名相似，辅助证据
+        "datatype": 0.04,            # 类型兼容，弱证据
+        "distribution": 0.04,        # 分布相似，易误判，权重低
+        "null_pattern": 0.04,        # 空值模式，易误判，权重低
+        "format_similarity": 0.10,
+        "cluster_overlap": 0.10,
     }
 
     @classmethod
@@ -287,7 +288,21 @@ class EvidenceGraphBuilder:
             else:
                 co_occurrence_score = 0.5 if profile_a.dataset_name == profile_b.dataset_name else 0.2
 
-            # ---- 4.8 综合证据构建 ----
+            # [新增] 4.8 形态学相似度 (Format Similarity)
+            format_sim = cls._compute_format_similarity(df[col_a], df[col_b])
+
+            # [新增] 4.9 聚类重叠度 (Cluster Overlap)
+            cluster_overlap = 0.0
+            clusters_a = profile_a.value_fingerprint_clusters or {}
+            clusters_b = profile_b.value_fingerprint_clusters or {}
+            if clusters_a and clusters_b:
+                keys_a = set(clusters_a.keys())
+                keys_b = set(clusters_b.keys())
+                inter = len(keys_a & keys_b)
+                union = len(keys_a | keys_b)
+                cluster_overlap = inter / union if union > 0 else 0.0
+
+            # ---- 4.10 综合证据构建 ----
             evidence = EvidenceDetail(
                 name_similarity=round(name_sim, 4),
                 value_overlap=round(jaccard, 4),
@@ -299,6 +314,8 @@ class EvidenceGraphBuilder:
                 distribution_similarity=round(dist_sim, 4),
                 datatype_compatibility=round(datatype_compat, 4),
                 minhash_similarity=None,
+                format_similarity=round(format_sim, 4),
+                cluster_overlap=round(cluster_overlap, 4),
             )
 
             # ---- 4.9 综合权重 ----
@@ -309,8 +326,9 @@ class EvidenceGraphBuilder:
                 cls.EVIDENCE_WEIGHTS["name_similarity"] * name_sim +
                 cls.EVIDENCE_WEIGHTS["datatype"] * datatype_compat +
                 cls.EVIDENCE_WEIGHTS["distribution"] * dist_sim +
-                cls.EVIDENCE_WEIGHTS["null_pattern"] * null_pattern_sim
-                # cls.EVIDENCE_WEIGHTS["co_occurrence"] * co_occurrence_score
+                cls.EVIDENCE_WEIGHTS["null_pattern"] * null_pattern_sim +
+                cls.EVIDENCE_WEIGHTS["format_similarity"] * format_sim +
+                cls.EVIDENCE_WEIGHTS["cluster_overlap"] * cluster_overlap
             )
             weight = round(min(1.0, weighted_score), 4)
 
@@ -670,6 +688,45 @@ class EvidenceGraphBuilder:
                 np.sum(q * np.log((q + 1e-10) / (m + 1e-10)))
             )
             return round(max(0.0, 1.0 - min(1.0, jsd)), 4)
+
+    @classmethod
+    def _get_format_signature(cls, val: Any) -> str:
+        """
+        将单个值转换为格式签名（忽略具体值，只保留结构）:
+        - 连续数字序列 → 'D'
+        - 连续字母序列 → 'A'
+        - 其他字符原样保留（如 -, /, . 等）
+        示例: "2023-01-15" → "D-D-D"  (或 "D-D")
+        """
+        s = str(val)
+        # 将连续数字替换为 'D'
+        s = re.sub(r'\d+', 'D', s)
+        # 将连续字母替换为 'A'（小写不区分）
+        s = re.sub(r'[A-Za-z]+', 'A', s)
+        return s
+
+    @classmethod
+    def _compute_format_similarity(
+        cls, 
+        series_a: pd.Series, 
+        series_b: pd.Series, 
+        sample_size: int = 500
+    ) -> float:
+        """
+        计算两列格式签名的 Jaccard 相似度。
+        仅对非空字符串采样。
+        """
+        sigs_a = set(
+            series_a.dropna().astype(str).head(sample_size).apply(cls._get_format_signature)
+        )
+        sigs_b = set(
+            series_b.dropna().astype(str).head(sample_size).apply(cls._get_format_signature)
+        )
+        if not sigs_a or not sigs_b:
+            return 0.0
+        inter = len(sigs_a & sigs_b)
+        union = len(sigs_a | sigs_b)
+        return inter / union if union > 0 else 0.0
 
     @classmethod
     def _compute_datatype_compatibility(cls, profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
