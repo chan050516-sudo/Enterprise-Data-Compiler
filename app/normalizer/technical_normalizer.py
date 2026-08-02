@@ -44,7 +44,11 @@ class TechnicalNormalizer:
         working_df = df.copy()
         
         for col in working_df.columns:
-            col_report = ColumnNormalizationReport(column_name=col, original_dtype=str(working_df[col].dtype))
+            col_report = ColumnNormalizationReport(
+                column_name=col,
+                original_dtype=str(working_df[col].dtype),
+                new_dtype="unknown"  # 占位，后续会更新
+            )
             
             # ----- 基础空值预处理 -----
             if working_df[col].dtype == 'object':
@@ -62,7 +66,7 @@ class TechnicalNormalizer:
                 continue
 
             # ----- 通用文本清洗（始终执行） -----
-            series = working_df[col].astype(str)
+            series = working_df[col].fillna('').astype(str)
             
             if self.normalize_unicode:
                 series = series.apply(lambda x: unicodedata.normalize('NFKC', x))

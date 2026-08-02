@@ -6,14 +6,28 @@ class ColumnNormalizationReport(BaseModel):
     """单列规范化审计报告"""
     column_name: str
     original_dtype: str
-    new_dtype: str
+    new_dtype: Optional[str] = None
     nulls_filled: int = 0
     whitespace_stripped: int = 0
     date_format_converted: int = 0
     numeric_format_converted: int = 0
     phone_format_converted: int = 0
-    samples_before: List[Any] = Field(default_factory=list, max_items=3)
-    samples_after: List[Any] = Field(default_factory=list, max_items=3)
+    samples_before: List[Any] = Field(default_factory=list, max_length=3)
+    samples_after: List[Any] = Field(default_factory=list, max_length=3)
+
+    # ===== 新增字段：检测结果 =====
+    detected_type: Optional[str] = None
+    detection_confidence: Optional[float] = None
+    
+    # ===== 新增字段：形态学统计（可选） =====
+    numeric_density: Optional[float] = None
+    length_std: Optional[float] = None
+    separator_profile: Optional[Dict[str, float]] = None
+    
+    # ===== 原有字段（确保存在） =====
+    currency_units_extracted: Dict[str, int] = Field(default_factory=dict)
+    enum_normalized: int = 0
+    delimiter_unified: bool = False
 
 class NormalizationReport(BaseModel):
     """全局规范化报告"""
@@ -21,8 +35,7 @@ class NormalizationReport(BaseModel):
     total_rows: int = 0
     total_columns: int = 0
     columns_processed: List[ColumnNormalizationReport] = Field(default_factory=list)
-    detected_type: Optional[str] = None
-    detection_confidence: Optional[float] = None
+    
     currency_units_extracted: Dict[str, int] = Field(
         default_factory=dict, 
         description="提取到的货币单位及其出现次数，例如 {'RM': 150, 'USD': 20}"
