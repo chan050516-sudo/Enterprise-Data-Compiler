@@ -166,3 +166,455 @@ Date: 9/7/2026
 ### 7. 小结
 
 该系统是一个**面向数据迁移与集成的高鲁棒性编译引擎**，将数据映射、质量校验、事务补偿、人工干预和宏观调度整合为统一的管道。其核心是**IR（中间表示）驱动的声明式数据转换**，配合**双层控制（控制平面管理契约，执行平面负责编译）**，实现了企业级数据工作流的自动化与可控性。
+
+
+
+
+--------------------------------------------------
+
+
+Date: 2/8/2026
+
+基于您提供的完整代码库，这是一个**自主企业级数据编译器（Autonomous Enterprise Data Compiler）**，它并非传统的 ETL 工具，而是一个**“AI 驱动的数据迁移操作系统”**。其核心使命是：**将任意杂乱无章的源数据（如 POS 销售表、Excel 导出），全自动地编译为符合目标 ERP（如 SAP、Oracle）严苛业务契约的干净数据，并安全地交付给业务系统。**
+
+以下是完整的项目上下文、架构解说，以及一个端到端的输入实例推演。
+
+---
+
+## 一、整体架构全景图
+
+系统采用 **“控制平面（Control Plane）与执行平面（Execution Plane）分离”** 的经典企业级架构，并辅以 **9 层逻辑处理流水线（Pipeline Layers）**。
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LAYER 9: 宏观编排 (Wave Orchestrator)                │
+│                    (多业务对象依赖拓扑排序 + 级联熔断)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LAYER 8: 物理交付 (SQLite Writer / CSV Exporter)     │
+│                       (幂等写入 + Saga 逆向冲销补偿)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     LAYER 7: 业务对账 (Reconciliation Engine)                │
+│          (日期漂移容忍、复式记账配平、递归汇总校验)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  LAYER 6: 确定性编译 (IRCompiler) + 信任评估                  │
+│     (Operator Registry 向量化执行 Pandas + ODCS 契约引擎)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LAYER 5: 控制平面 (Governor + SpecRepo)                   │
+│          (MappingSpec 状态机: DRAFT -> LOCKED -> ARCHIVED)                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   LAYER 4: 映射规划 (Mapping Planner + LLM)                  │
+│             (生成包含推理链的 AdvancedTransformationIR)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           LAYER 3: 推理引擎 (Reasoning Engine + 语义解释器)                   │
+│     (证据图 → 贝叶斯假设池 → LLM 语义消歧 → Resolution Loop)                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     LAYER 2: 证据图构建 (Evidence Graph)                     │
+│      (列画像 → 行为指纹分块 → FD/FK/相似度确定性计算)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               LAYER 1: 语义画像 (Semantic Profiler / IR-0)                   │
+│        (统计特征: 唯一性、空值率、熵、高频值、正则模式)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               LAYER 0.5: 技术标准化 (Technical Normalizer)                   │
+│          (无损格式化: 日期/电话/货币/空白/Unicode 统一)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       LAYER 0: 数据源连接器 (CSV Connector)                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 二、逐层深度解析（输入、输出、问题、方案）
+
+### 1. **Layer 0 & 0.5：连接与标准化**
+- **输入**：原始 CSV 文件路径（如 `sales_export.csv`，包含各种奇怪的日期格式、货币符号、前后空格）。
+- **输出**：Pandas DataFrame（所有字段统一为 UTF-8，空格压缩，日期转为 ISO 格式，电话加上 `+60` 国家码）。
+- **解决的问题**：ERP 系统对格式极其敏感（如 SAP 不接受 `2023/12/31`，只接受 `2023-12-31`）。
+- **使用方案**：基于配置的 `TechnicalNormalizer`，使用 Pandas 向量化操作 + 正则表达式，做纯无损清洗（不改变业务含义）。
+
+---
+
+### 2. **Layer 1：语义画像（IR-0）**
+- **输入**：标准化的 DataFrame。
+- **输出**：`List[ColumnProfileIR]`（每列的统计摘要：数据类型、空值率 `null_ratio`、唯一率 `unique_ratio`、信息熵 `entropy`、高频 Top 5 值、推断的正则模式如 `email`/`phone`）。
+- **解决的问题**：计算机无法直接理解 `RecNo` 和 `CustName` 哪个是主键，哪个是描述字段。
+- **使用方案**：纯统计学算法（Pandas `.describe()`、`value_counts()`、正则匹配），快速生成数据指纹。
+
+---
+
+### 3. **Layer 2：证据图构建（IR-1）**
+- **输入**：`ColumnProfileIR` 列表 + 原始 DataFrame。
+- **输出**：`EvidenceGraph`（节点=列，边= `FUNCTIONAL_DEPENDENCY`、`POSSIBLE_FK`、`SIMILAR_TO`，每条边带有多维证据权重如 Jaccard、包含度、分布相似度）。
+- **解决的问题**：多张表/大量列的关系发现（如 `RecNo` -> `OrderId` 存在函数依赖，`CustName` 与 `SupplierName` 值集合高度重叠）。
+- **使用方案**：
+  - **行为分块（Blocking）**：根据列的“变化率、熵、基数比”将列分组，只比较组内列，将 O(n²) 降为 O(n log n)。
+  - **确定性证据融合**：计算 Jaccard、FD Confidence（基于分组聚合）、包含依赖（Inclusion Dependency），使用硬编码权重表（`EVIDENCE_WEIGHTS`）综合打分。
+
+---
+
+### 4. **Layer 3：推理引擎（语义假设池）**
+- **输入**：`EvidenceGraph`。
+- **输出**：`HypothesisPool`（包含 `ENTITY` 假设，每个实体包含一组列，并有置信度 `confidence`） + `SemanticInterpretation`（LLM 给出的业务含义，如“Customer”）。
+- **解决的问题**：哪些列属于同一个业务对象（实体）？这个业务对象究竟是“客户”还是“供应商”？
+- **使用方案**：
+  - **图社区发现（Louvain）**：利用 NetworkX 将高权重边聚合为初始实体假设。
+  - **贝叶斯对数概率推理**：使用 `ReasoningEngine`，在假设空间上迭代。将证据（PK Score、FD、FK）转化为对数似然，通过 Softmax 归一化更新置信度。
+  - **约束即证据（Constraint as Evidence）**：违反主键唯一性或实体内聚性的假设会被降权。
+  - **Resolution Loop（解析循环）**：对于置信度低于阈值的假设，自动触发 `ExactLookupOperator` 或 `SimilarityMatchOperator` 产生新的证据回灌到推理循环中。
+  - **LLM 消歧**：对于熵值高的实体，`SemanticInterpreter` 调用 Gemini 给出候选业务类型（如 `BusinessPartner`），其证据可靠性被校准为 0.55（低于统计证据的 0.95）。
+
+---
+
+### 5. **Layer 4：映射规划（IR-4）**
+- **输入**：源 Schema、确认的实体假设、证据图、目标业务本体（`TargetOntology`，如 `finance_erp`）。
+- **输出**：`MappingSpec`（包含 `AdvancedTransformationIR` 中间计算图 + `output_mappings`）。
+- **解决的问题**：源表列 `CustName` 如何映射到目标表的 `business_partner_name`？是否需要拼接、计算或查表？
+- **使用方案**：**LLM 单次生成**（`MappingPlanner`）。系统将源列、证据图摘要（Top 5 PK 候选、高置信边）、目标字段定义和规范本体（Canonical）打包进 Prompt。LLM 返回结构化的 JSON，直接生成包含 `intermediate_steps`（如 `CONCAT`、`PARSE_DATE`）和 `output_mappings` 的 DAG（有向无环图）。
+
+---
+
+### 6. **Layer 5：控制平面（治理与存储）**
+- **输入**：AI 生成的 `MappingSpec`（状态 = `DRAFT`）。
+- **输出**：状态变为 `LOCKED` 的 `MappingSpec`（持久化在 SQLite `control_plane.db` 中）。
+- **解决的问题**：防止 AI 幻觉导致生产事故，需要人类高管审批或自动锁定机制。
+- **使用方案**：
+  - **有限状态机（FSM）**：`Governor` 强制流转 `DRAFT -> PENDING_APPROVAL -> LOCKED -> ARCHIVED`。
+  - **排他性锁**：`SpecRepository` 使用 SQLite 事务，在 `promote_to_locked` 时，自动将同 Domain 下的其他 `LOCKED` 规约归档（`ARCHIVED`），确保执行平面永远只读取最新生效的契约。
+
+---
+
+### 7. **Layer 6：执行平面（编译 + 信任评估）**
+- **输入**：`LOCKED` 的 `MappingSpec` + 源 DataFrame。
+- **输出**：编译后的 `DataFrame`（目标表结构）+ `TrustAuditReport`。
+- **解决的问题**：IR 图包含连接（JOIN）、窗口函数（WINDOW_APPLY）等复杂算子，如何高效执行？
+- **使用方案**：
+  - **确定性算子注册表（Operator Registry）**：`IRCompiler` 将 IR Node 路由到具体的 Pandas 函数（如 `_op_join`、`_op_group_by`）。采用 Kahn 算法拓扑排序保证依赖顺序。
+  - **ODCS 契约引擎（`DataTrustEngine`）**：针对目标本体的 `row_level_rules`（如 `not_null`、`pattern`、`foreign_key`）和 `dataset_level_rules`（如 `volume_check`）进行逐行/全局扫描。违反者被打入 `quarantine_indices`。
+  - **信任打分**：`Trust Score = 1.0 - (隔离行数/总行数)`，小于 0.95 则路由至隔离区（QUARANTINE），否则允许提交（PASS）。
+
+---
+
+### 8. **Layer 7：业务对账与 Saga 补偿**
+- **输入**：编译后的 DataFrame + 业务不变量配置（如双录平衡 `debit == credit`）。
+- **输出**：通过对账的 `clean_df` + 更新的审计报告。
+- **解决的问题**：财务系统必须满足会计恒等式，且容忍银行到账日的 3 天漂移。
+- **使用方案**：
+  - **ReconciliationEngine**：实现**日期容忍度**（允许 `arrival_date` 和 `inspection_date` 相差 5 天）、**头行汇总一致性**（单据总金额等于明细行汇总）、**递归树汇总**（BOM 结构父级等于子级之和）。
+  - **SagaManager**：若写入数据库中途失败（如磁盘满），立即触发 **逆向编译**（`InverseCompiler`），将所有金额取反（负值），生成红字凭证冲销已写入的数据，保证最终一致性。
+
+---
+
+### 9. **Layer 8：物理交付**
+- **输入**：`clean_df` 或 `reversal_df`。
+- **输出**：SQLite 数据库记录 / CSV 文件。
+- **解决的问题**：高并发写入和断点续传。
+- **使用方案**：使用 `INSERT OR REPLACE`（基于复合主键 `batch_id + 业务主键`）实现幂等写入；对层级数据（`CALCULATE_HIERARCHY` 输出的 `__tree_depth__`）采用 Top-Down 分块提交，防止外键死锁。
+
+---
+
+### 10. **Layer 9：宏观波次编排**
+- **输入**：`MigrationWave`（包含 `Task A -> depends_on -> Task B` 的 DAG）。
+- **输出**：全局参照池 + 任务执行报告。
+- **解决的问题**：必须先迁移主数据（Customer），才能迁移事务数据（Invoice），否则外键校验失败。
+- **使用方案**：Kahn 拓扑排序执行任务，前置任务失败则下游任务直接跳过（级联熔断）。成功的任务数据会被注入 `_global_reference_pool`，供下游做 `foreign_key` 校验。
+
+---
+
+## 三、端到端（E2E）输入实例推演
+
+### **输入数据：** `messy_pos_export.csv`
+
+| Row | CUST_ID | FULL_NAME     | ENTRY_DT   | AMOUNT      | REGION_ID |
+|-----|---------|---------------|------------|-------------|-----------|
+| 0   | C001    | " John Doe "  | 2023-01-15 | "$100.00"   | R1        |
+| 1   | C002    | "JANE DOE"    | 01/20/2023 | "200"       | R2        |
+| 2   | C003    | "Smith, Bob"  | 2023.02.01 | "$ 300.50"  | R1        |
+| 3   | C004    | "Tech Corp"   | 23-03-10   | "400.00 USD"| R3        |
+| 4   | C005    | "Acme Inc"    | 2023/04/05 | "500"       | **R999**  |
+
+**目标业务本体（Target Ontology）：** `finance_erp`
+- 字段：`partner_id` (string, not_null, unique)
+- 字段：`partner_name` (string, not_null)
+- 字段：`transaction_date` (date, not_null)
+- 字段：`total_amount` (float, non_negative)
+- 字段：`region_code` (string, **枚举约束** `["R1", "R2", "R3"]`)
+- **全局不变量**：`total_amount` 必须大于 `0`（非负已涵盖）。
+
+---
+
+### **Phase 0: 数据源连接 (CSVConnector)**
+- **操作**：`CSVConnector.read_data()` 调用 `pandas.read_csv(encoding='utf-8')`。
+- **结果**：生成原始 `DataFrame`，`ENTRY_DT` 为 `object` 类型，`AMOUNT` 为 `object` 类型（含 `$`），`REGION_ID` 为 `object`。
+
+---
+
+### **Phase 0.5: 技术标准化 (TechnicalNormalizer)**
+- **入口**：`normalizer.normalize(df)`，应用 `settings.py` 中的配置（`NORMALIZE_DATES=True`, `NORMALIZE_CURRENCY=True`）。
+- **具体操作（逐列）**：
+
+  - **`CUST_ID`**：检测到无特殊字符，执行 `str.strip()`，保留原值。
+  - **`FULL_NAME`**：
+    - 执行 `str.strip()` 去除首尾空格（`" John Doe "` → `"John Doe"`）。
+    - 执行 `str.replace(r'\s+', ' ')` 压缩中间多个空格。
+    - 检测到无全角字符，跳过 Unicode 规范化。
+  - **`ENTRY_DT`**：
+    - 调用 `_try_parse_dates()`。尝试用 `pd.to_datetime(..., dayfirst=True)` 解析。
+    - 成功解析所有混合格式（`2023.02.01`, `23-03-10`, `2023/04/05`），统一转为 `2023-01-15`, `2023-01-20`, `2023-02-01`, `2023-03-10`, `2023-04-05`。**成功率达 100%，判定为日期列**，替换原列为日期类型。
+  - **`AMOUNT`**：
+    - 检测到含 `$` 和 `USD`，触发 `_extract_and_clean_currency()`。
+    - 正则 `re.search(r'[\$€£¥]|(USD|RM|MYR)')` 匹配符号，`re.search(r'\d+\.?\d*')` 提取数字。
+    - 转换结果：`100.0`, `200.0`, `300.5`, `400.0`, `500.0`。同时新增元数据列 `AMOUNT_currency_unit`（值为 `USD`, `None`, `None`, `USD`, `None`）。
+  - **`REGION_ID`**：执行 `str.strip().upper()`，`"R1"` 保持不变，`"R999"` 保持不变。
+
+- **输出**：清洗后的 DataFrame + `NormalizationReport`（记录每列转换样本数）。
+
+---
+
+### **Phase 1: 语义画像 (SemanticProfiler)**
+- **入口**：`SemanticProfiler.generate_column_profiles(df, dataset_name="pos_data")`。
+- **具体操作（逐列统计）**：
+
+  - **`CUST_ID`**：`data_type="string"`，`null_ratio=0.0`，`unique_ratio=1.0`，`distinct_count=5`，`entropy=2.32`（log2(5)），`pattern=None`，`candidate_types=["code"]`。
+  - **`FULL_NAME`**：`data_type="string"`，`null_ratio=0.0`，`unique_ratio=1.0`，`avg_length=9.8`，`pattern=None`（无 regex 匹配），`candidate_types=["string"]`。
+  - **`ENTRY_DT`**：`data_type="date"`（由 Pandas 推断），`null_ratio=0.0`，`unique_ratio=1.0`，`candidate_types=["date"]`。
+  - **`AMOUNT`**：`data_type="numeric"`，`min=100.0`，`max=500.0`，`mean=300.0`，`percentiles={25%: 200.0, 50%: 300.5, 75%: 400.0}`，`unique_ratio=1.0`，`candidate_types=["currency", "non_negative"]`。
+  - **`REGION_ID`**：`data_type="string"`，`unique_ratio=0.8`（R1 重复），`distinct_count=4`（R1, R2, R3, R999），`entropy=1.92`，`top_frequencies={"R1":2}`，`candidate_types=["enum"]`。
+
+- **输出**：`List[ColumnProfileIR]`（包含所有统计特征）。
+
+---
+
+### **Phase 2: 证据图构建 (EvidenceGraphBuilder)**
+- **入口**：`EvidenceGraphBuilder.build(profiles, df)`。
+- **具体操作（算法黑盒拆解）**：
+
+  1. **节点构建**：
+     - 为每列计算 `pk_score`。
+       - `CUST_ID`：`unique_ratio=1`，列名含 `ID`（语义加分），`monotonicity=0.5`（无顺序），得分为 `0.92`（极高）。
+       - `REGION_ID`：`unique_ratio=0.8`，语义无 `ID`，得分为 `0.45`（低）。
+
+  2. **行为分块（Blocking）**：
+     - 计算 `behavior_fingerprint`（变化率、熵、基数比）。
+     - `CUST_ID` 熵 2.32，`REGION_ID` 熵 1.92，`FULL_NAME` 熵 2.32。三者落入同一粗粒度桶（`b4_e2_c4`），因此会互相比较。`AMOUNT` 熵 2.32 但数值型，落入 `b0_e2_c5`（变化率低），但与 `CUST_ID` 等跨块比较（因为锚点策略）。
+
+  3. **证据计算（逐对）**：
+     - **Pair (`CUST_ID`, `REGION_ID`)**：
+       - `fd_conf` (CUST_ID -> REGION_ID) = 1.0（C001 总对应 R1）。
+       - `inclusion_degree` (REGION_ID 包含于 CUST_ID) = 0（R1 不在 CUST_ID 值集中）。
+       - `weight = 0.3*1.0 + 0.25*0 + 0.2*0 + ... = 0.36`。因大于 0.3，生成 `FUNCTIONAL_DEPENDENCY` 边（权重 0.36）。
+     - **Pair (`REGION_ID`, `AMOUNT`)**：
+       - `jaccard` = 0（值无交集）。
+       - `fd_conf` 极低（R1 对应 100 和 300.5）。
+       - `weight` < 0.3，**丢弃该边**（无直接关系）。
+     - **Pair (`FULL_NAME`, `CUST_ID`)**：
+       - `name_similarity` = 0.0（完全不像）。
+       - `jaccard` = 0。
+       - 丢弃。
+     - **Pair (`ENTRY_DT`, `AMOUNT`)**：无重叠，丢弃。
+
+  4. **边类型决策**：
+     - 仅保留一条有效边：`CUST_ID -> REGION_ID`（类型 `FUNCTIONAL_DEPENDENCY`）。
+     - 没有 `POSSIBLE_FK`（因为没有跨表数据）。
+
+- **输出**：`EvidenceGraph`（5 个节点，1 条边）。
+
+---
+
+### **Phase 3: 推理引擎 (ReasoningEngine) + 语义解释**
+- **入口**：`ReasoningEngine.reason(evidence_graph)`。
+
+  1. **初始假设生成（Louvain + 核心扩展）**：
+     - 由于图中只有一条弱边，Louvain 无法形成大聚类。
+     - 降级为**单列兜底**：生成 5 个独立的 `ENTITY` 假设，每个假设只包含一列，置信度 `0.1`。
+
+  2. **贝叶斯迭代更新**：
+     - **迭代 1**：`Evidence` 绑定。`PK_SCORE` 证据（来自节点属性）影响对应实体。
+       - `CUST_ID` 实体：收到 `pk_score=0.92` 的证据，`likelihood` 函数返回 0.9。`log_posterior = log(0.1) + 0.9*log(0.9)`，更新后置信度跃升至 `0.65`。
+       - `REGION_ID` 实体：收到 `pk_score=0.45`，置信度微升至 `0.15`。
+       - 其他实体置信度保持 `0.1`。
+     - **假设竞争**：`CUST_ID` 置信度 0.65 最高，压制了其他低分实体（但未合并）。
+
+  3. **SemanticInterpreter (LLM 消歧)**：
+     - `SemanticInterpreter` 计算实体熵。`CUST_ID` 实体当前无语义候选，熵为 0，**不调用 LLM**（节省成本）。
+     - 但由于系统配置了 `--skip-reasoning=False`，且 `confirmed_entities` 为空，系统跳过 Phase 4（无实体可解释）。*（实际上，如果要演示 LLM，需要多列组合，但本例为了展示完整度，我们假设系统检测到 `CUST_ID` 和 `FULL_NAME` 存在潜在关联，即使没有边，也会由 `SemanticInterpreter` 的 `entities_with_entropy` 机制触发）*。
+     - **修正假设**：为了演示流程，假设推理引擎将 `CUST_ID` 和 `FULL_NAME` 强行合并为一个实体（通过启发式），并调用 LLM：
+       - Prompt 输入：`CUST_ID` 样本 `["C001"]`，`FULL_NAME` 样本 `["John Doe"]`。
+       - LLM 返回：`candidates: [{name: "Customer", canonical_type: "BusinessPartner", likelihood: 0.95}]`。
+       - 注入证据（`reliability=0.55`），置信度更新为 `0.75`。
+
+- **输出**：`HypothesisPool`（确认实体：`Customer`，包含列 `CUST_ID`, `FULL_NAME`）。
+
+---
+
+### **Phase 4 & 5: 映射规划与治理 (MappingPlanner + Governor)**
+- **入口**：`MappingPlanner.plan(..., target_ontology="finance_erp")`。
+
+  1. **LLM 生成 IR**：
+     - Prompt 包含源列（`CUST_ID`, `FULL_NAME`, `ENTRY_DT`, `AMOUNT`, `REGION_ID`）、证据图摘要、目标字段（`partner_id`, `partner_name`, `transaction_date`, `total_amount`, `region_code`）。
+     - LLM 返回 JSON（`MappingSpec`）：
+       ```json
+       "intermediate_steps": {
+         "cleaned_date": { "operation": "COPY", "inputs": [{"type":"COLUMN_REF","value":"ENTRY_DT"}] },
+         "cleaned_amount": { "operation": "COPY", "inputs": [{"type":"COLUMN_REF","value":"AMOUNT"}] }
+       },
+       "output_mappings": {
+         "partner_id": { "operation": "COPY", "inputs": [{"type":"COLUMN_REF","value":"CUST_ID"}] },
+         "partner_name": { "operation": "COPY", "inputs": [{"type":"COLUMN_REF","value":"FULL_NAME"}] },
+         "transaction_date": { "operation": "STEP_REF", "value": "cleaned_date" },
+         "total_amount": { "operation": "STEP_REF", "value": "cleaned_amount" },
+         "region_code": { "operation": "COPY", "inputs": [{"type":"COLUMN_REF","value":"REGION_ID"}] }
+       }
+       ```
+
+  2. **控制平面（Governor）**：
+     - `SpecGovernor.propose_new_spec()` → 状态 `DRAFT`。
+     - `SpecGovernor.submit_for_approval()` → 状态 `PENDING_APPROVAL`（模拟人工审批，或 `--auto-approve` 直接调用 `approve_and_lock`）。
+     - `SpecGovernor.approve_and_lock()`：
+       - 将当前 Spec 状态设为 `LOCKED`。
+       - `SpecRepository.promote_to_locked()` 开启 SQLite 事务，将同 Domain 下其他 `LOCKED` 规约置为 `ARCHIVED`（确保唯一生效）。
+
+- **输出**：`LOCKED` 的 `MappingSpec`（包含完整 IR-DAG）。
+
+---
+
+### **Phase 6: 执行与信任评估 (PipelineOrchestrator + IRCompiler + DataTrustEngine)**
+- **入口**：`orchestrator.run_pipeline(source_df, active_spec, target_ontology)`。
+
+  1. **拓扑排序与编译 (IRCompiler)**：
+     - Kahn 算法排序 `intermediate_steps`：`cleaned_date` -> `cleaned_amount`（无依赖）。
+     - 执行 `COPY`：`runtime_context["cleaned_date"] = df["ENTRY_DT"]`（结果：5 个日期）。
+     - 执行 `COPY`：`runtime_context["cleaned_amount"] = df["AMOUNT"]`（结果：5 个浮点数）。
+     - 生成输出 DataFrame：
+       | partner_id | partner_name | transaction_date | total_amount | region_code |
+       |------------|--------------|------------------|--------------|-------------|
+       | C001       | John Doe     | 2023-01-15       | 100.0        | R1          |
+       | C002       | Jane Doe     | 2023-01-20       | 200.0        | R2          |
+       | C003       | Smith, Bob   | 2023-02-01       | 300.5        | R1          |
+       | C004       | Tech Corp    | 2023-03-10       | 400.0        | R3          |
+       | C005       | Acme Inc     | 2023-04-05       | 500.0        | **R999**    |
+
+  2. **ODCS 契约引擎 (DataTrustEngine)**：
+     - **行级规则扫描**：
+       - `not_null` (partner_id, partner_name, transaction_date)：全部通过。
+       - `unique` (partner_id)：全部通过（5 个唯一）。
+       - `non_negative` (total_amount)：全部通过（均 > 0）。
+       - `enum_match` (region_code, allowed=["R1","R2","R3"])：
+         - 扫描 `region_code` 列。
+         - 第 4 行（C005）值为 `R999`，不在集合中。
+         - `bad_idx = [4]`，`error_ratio = 1/5 = 0.2`。
+         - 严重性为 `error`，`tolerance_ratio=0.0`，因此将该行索引 4 加入 `quarantine_indices`。
+     - **数据集级规则**：
+       - `volume_check (min_rows=1)`：通过（5 >= 1）。
+     - **计算信任分**：
+       - `quarantine_count = 1`, `total_rows = 5`。
+       - `trust_score = 1.0 - (1/5)*1.0 = 0.8`。
+       - 因为 `0.8 < 0.95`，`routing_decision = "QUARANTINE"`。
+
+  3. **数据路由**：
+     - `_route_data()` 根据 `quarantine_indices=[4]` 分割数据。
+     - **`clean_df`**（索引 0-3）：4 行干净数据。
+     - **`quarantine_df`**（索引 4）：1 行（`C005, Acme Inc, ..., R999`）进入隔离区。
+
+- **输出**：`clean_df`（4行），`quarantine_df`（1行），`TrustAuditReport`（trust_score=0.8）。
+
+---
+
+### **Phase 7: 业务对账与 Saga 补偿 (ReconciliationEngine)**
+- **入口**：`reconciler.perform_reconciliation(compiled_df, audit_report, target_ontology)`。
+
+  1. **日期容忍度检查**：
+     - 从 `finance_erp` 本体读取 `date_tolerance` 规则（假设配置了 `transaction_date` vs `posting_date`，但本例无 `posting_date`，跳过）。
+
+  2. **全局不变量检查（双录平衡）**：
+     - 配置了 `double_entry_invariant`，要求 `debit == credit`。但本表无 `debit`/`credit`，跳过。
+
+  3. **由于 `routing_decision` 已经是 `QUARANTINE`，对账引擎无需再追加隔离**。
+     - 审计报告中的 `dataset_errors` 为空。
+
+  4. **自治补丁生成（MAPE-K 自愈）**：
+     - `orchestrator` 检测到 `quarantine_df` 不为空，且 `mapping_planner` 存在。
+     - 调用 `_extract_failure_context()`：
+       - 提取 `region_code` 列的错误样本：`["R999"]`。
+       - 特征分析：`common_traits = "All failed strings are uppercase. No leading/trailing whitespaces."`
+     - 调用 `MappingPlanner.plan()` 生成**补丁 Spec**（Patch）：
+       - 生成一个 `VALUE_LOOKUP` 算子，将 `R999` 映射到 `R3`（或 NULL），或增加枚举列表。
+       - 新 Spec 状态为 `DRAFT`，`parent_spec_id` 指向当前失败的 Spec，提交给人类审核。
+     - 记录到日志。
+
+- **输出**：隔离数据 + 补丁规约（已保存）。
+
+---
+
+### **Phase 8 & 9: 物理交付与宏观编排 (SQLiteWriter + SecondaryExporter)**
+- **入口**：因为 `decision` 是 `QUARANTINE`，**不执行** `SQLiteWriter.commit()`。
+- **操作**：
+  - `QuarantineViewer.generate_review_payload(quarantine_df, audit_report)`：
+    - 转换隔离行为 `records`：`[{"partner_id":"C005", "region_code":"R999", ...}]`。
+    - 构建 `error_matrix`：`{ 0: {"region_code": ["ERROR: enum_match"]} }`。
+  - 输出 `quarantine_payload.json` 和 `audit_report.md`（Markdown 格式的验尸报告）。
+- **如果假设 `R999` 不存在，系统 PASS**：
+  - `SQLiteWriter.commit()` 会执行：
+    - `_ensure_table_exists()`：创建表 `erp_transaction_fact`，列含 `partner_id TEXT`，`total_amount REAL`，并设置复合主键 `("-batch_id", "partner_id")`。
+    - `_sanitize_for_sqlite()`：将 Pandas `NaN` 转为 `None`。
+    - `_execute_bulk_insert()`：执行 `INSERT OR REPLACE`，4 行数据入 SQLite。
+  - `SecondaryExporter.to_csv()`：导出 `compiled_snapshot.csv`（带 UTF-8 BOM，解决 Excel 乱码）。
+
+- **宏观编排（WaveOrchestrator）**（如有多表）：
+  - 若还配置了 `Invoice` 任务依赖 `Customer`，`WaveOrchestrator` 会将 `clean_df` 注入 `_global_reference_pool["Customer"]`。
+  - 下游 `Invoice` 任务执行 `foreign_key` 校验时，直接从池中读取 `partner_id` 列表，检查外键是否存在。
+
+---
+
+### **最终追踪报告 (ExecutionTrace)**
+- `orchestrator` 返回的 `trace` 对象包含：
+  - `compilation.steps`：`cleaned_date` 耗时 1.2ms，`cleaned_amount` 耗时 0.8ms。
+  - `trust_evaluation`：`trust_score=0.8`, `routing_decision="QUARANTINE"`。
+  - `reconciliation`：`invariants_checked=["date_tolerance", "double_entry"]`，`violations=[]`。
+  - `saga`：未触发，`triggered=False`。
+  - `final_state="QUARANTINED"`。
+
+---
+
+### **总结：系统的“全覆盖”动作清单**
+通过这 5 行数据，系统完整执行了：
+1. **I/O 与格式**：CSV 读取、日期解析、货币提取、空白修剪、Unicode 规范化。
+2. **统计挖掘**：熵、基数、空值率、分位数、高频值、模式推断。
+3. **关系发现**：行为分块、FD 计算、Jaccard、包含依赖、证据权重融合。
+4. **概率推理**：Louvain 聚类、对数似然更新、Softmax 归一化、假设竞争压制、约束即证据（PK 唯一性）。
+5. **AI 语义**：LLM Prompt 构建、结构化输出、证据可靠性校准。
+6. **代码生成**：IR-DAG 拓扑排序、算子路由、向量化执行。
+7. **契约执法**：`not_null`、`unique`、`enum_match`、`non_negative`、行级隔离、信任分计算。
+8. **自愈闭环**：错误上下文提取、补丁 Spec 自动生成（DRAFT）。
+9. **运维交付**：幂等 SQLite 写入、CSV BOM 头导出、结构化 JSON 审计日志。
+10. **失败隔离**：细胞级错误矩阵构建、人工复核 Payload 生成。
+
+这就是这个“AI 数据编译器”从读取到交付，面对脏数据时完整的、确定性的、可审计的工业化处理全貌。
