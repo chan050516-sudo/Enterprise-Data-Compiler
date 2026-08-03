@@ -15,15 +15,6 @@ class ColumnNormalizationReport(BaseModel):
     samples_before: List[Any] = Field(default_factory=list, max_length=3)
     samples_after: List[Any] = Field(default_factory=list, max_length=3)
 
-    # ===== 新增字段：检测结果 =====
-    detected_type: Optional[str] = None
-    detection_confidence: Optional[float] = None
-    
-    # ===== 新增字段：形态学统计（可选） =====
-    numeric_density: Optional[float] = None
-    length_std: Optional[float] = None
-    separator_profile: Optional[Dict[str, float]] = None
-    
     # ===== 原有字段（确保存在） =====
     currency_units_extracted: Dict[str, int] = Field(default_factory=dict)
     enum_normalized: int = 0

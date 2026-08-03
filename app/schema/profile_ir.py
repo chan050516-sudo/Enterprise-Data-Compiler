@@ -75,6 +75,20 @@ class ColumnProfileIR(BaseModel):
         default=None,
         description="指纹聚类覆盖率（总行数/聚类后总频次）"
     )
+
+    # ========== pandas-type-detector 结果（Phase 1 填充） ==========
+    detected_type: Optional[str] = Field(
+        default=None,
+        description="由 pandas-type-detector 推断的技术类型，如 'phone', 'email', 'date'"
+    )
+    detection_confidence: Optional[float] = Field(
+        default=None,
+        description="检测置信度 (0-1)"
+    )
+    detected_format: Optional[str] = Field(
+        default=None,
+        description="检测到的格式，如日期格式 '%Y-%m-%d'"
+    )
     
     # ---------- 内部缓存（用于关系计算，不序列化） ----------
     _value_set: Optional[Set[Any]] = None

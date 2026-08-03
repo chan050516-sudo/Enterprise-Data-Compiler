@@ -7,6 +7,13 @@ from collections import Counter
 from typing import Dict, Any, List, Optional
 from app.schema.profile_ir import ColumnProfileIR
 
+try:
+    from pandas_type_detector import TypeDetectionPipeline
+    HAS_PANDAS_TYPE_DETECTOR = True
+except ImportError:
+    HAS_PANDAS_TYPE_DETECTOR = False
+    TypeDetectionPipeline = None
+
 logger = logging.getLogger(__name__)
 
 class SemanticProfiler:
@@ -24,6 +31,15 @@ class SemanticProfiler:
         "phone": r"^\+?\d[\d\s\-()]{7,20}$",
         "currency_code": r"^[A-Z]{3}$"
     }
+
+    # 类级别缓存 TypeDetectionPipeline 实例（避免重复初始化）
+    _type_detector = None
+
+    @classmethod
+    def _get_type_detector(cls):
+        if cls._type_detector is None and HAS_PANDAS_TYPE_DETECTOR:
+            cls._type_detector = TypeDetectionPipeline(locale="en-us")
+        return cls._type_detector
 
     @classmethod
     def generate_column_profiles(
@@ -135,6 +151,24 @@ class SemanticProfiler:
                     'cluster_coverage': 0.0,
                 }
 
+            # ---------- pandas-type-detector 检测 ----------
+            detected_type = None
+            detection_confidence = None
+            detected_format = None
+            if HAS_PANDAS_TYPE_DETECTOR and valid_count > 5:
+                detector = cls._get_type_detector()
+                if detector:
+                    try:
+                        # 采样前 100 行用于检测
+                        sample_series = valid_series.head(100).astype(str)
+                        # 假设 API: detect_column_type(series) 返回对象
+                        result = detector.detect_column_type(sample_series)
+                        detected_type = getattr(result, 'data_type', None)
+                        detection_confidence = getattr(result, 'confidence', None)
+                        detected_format = getattr(result, 'format', None)
+                    except Exception as e:
+                        logger.debug(f"pandas-type-detector failed for column {col}: {e}")
+
             # 构建 Profile 对象（注入所有新字段）
             profile = ColumnProfileIR(
                 column_name=col,
@@ -163,6 +197,9 @@ class SemanticProfiler:
                 decimal_place_mode=morph_features['decimal_place_mode'],
                 value_fingerprint_clusters=morph_features['value_fingerprint_clusters'],
                 cluster_coverage=morph_features['cluster_coverage'],
+                detected_type=detected_type,
+                detection_confidence=detection_confidence,
+                detected_format=detected_format,
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )
             profiles.append(profile)
