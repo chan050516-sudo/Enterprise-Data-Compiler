@@ -43,7 +43,6 @@ class TechnicalNormalizer:
             EmailDetector(),
             DateDetector(),
             BooleanDetector(),
-            EnumDetector(),
             CurrencyDetector(),
         ]
 
@@ -122,10 +121,6 @@ class TechnicalNormalizer:
                 elif best.type == 'boolean':
                     series = self._normalize_boolean(series, best.metadata)
                     col_report.new_dtype = "boolean"
-
-                elif best.type == 'enum':
-                    series = self._normalize_enum(series, best.metadata)
-                    col_report.new_dtype = "string"
 
                 elif best.type == 'currency':
                     numeric_series, unit_series = self._normalize_currency(series, best.metadata)
@@ -217,10 +212,6 @@ class TechnicalNormalizer:
             'false': False, 'no': False, 'n': False, '0': False, 'f': False
         }
         return series.str.lower().str.strip().map(mapping).astype('object')
-
-    def _normalize_enum(self, series: pd.Series, metadata: Dict) -> pd.Series:
-        # 仅小写+去空格，不做合并
-        return series.astype(str).str.lower().str.strip().replace(['nan', 'none', '<na>'], pd.NA)
 
     def _normalize_currency(self, series: pd.Series, metadata: Dict) -> Tuple[pd.Series, pd.Series]:
         """使用 price-parser 和 babel 提取金额和 ISO 货币代码"""

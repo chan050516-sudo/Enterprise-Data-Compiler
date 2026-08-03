@@ -219,14 +219,6 @@ class TestTechnicalNormalizer:
             else:
                 assert r == e
 
-    def test_enum_detection_and_normalization(self, normalizer, sample_data):
-        """测试枚举列的标准化（小写+去空格，不合并同义词）"""
-        df = sample_data[["enum"]].copy()
-        normalized, report = normalizer.normalize(df)
-        expected = ["red", "blue", "blue", "red", "green", "green", "green"]
-        result = normalized["enum"].iloc[:7].tolist()
-        assert result == expected
-
     def test_config_disable_features(self):
         """测试通过配置禁用某些功能"""
         normalizer = TechnicalNormalizer(config={

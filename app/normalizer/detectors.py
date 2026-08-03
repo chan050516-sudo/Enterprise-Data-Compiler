@@ -154,20 +154,6 @@ class BooleanDetector(BaseDetector):
             )
         return None
 
-class EnumDetector(BaseDetector):
-    def detect(self, series: pd.Series) -> Optional[DetectionResult]:
-        sample = series.dropna()
-        if len(sample) < 5:
-            return None
-        unique_ratio = sample.nunique() / len(sample)
-        if unique_ratio < 0.05:
-            return DetectionResult(type='enum', confidence=0.95, metadata={'unique_ratio': unique_ratio})
-        if unique_ratio < 0.2:
-            lengths = sample.astype(str).str.len()
-            if lengths.std() < 1.5:
-                return DetectionResult(type='enum', confidence=0.80, metadata={'unique_ratio': unique_ratio})
-        return None
-
 class CurrencyDetector(BaseDetector):
     CURRENCY_SYMBOLS = re.compile(r'[\$€£¥]|USD|RM|MYR|SGD|EUR|GBP|JPY|CNY|AUD', re.IGNORECASE)
     def detect(self, series: pd.Series) -> Optional[DetectionResult]:
