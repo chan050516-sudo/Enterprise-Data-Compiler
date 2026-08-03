@@ -9,7 +9,7 @@ from app.config.settings import settings
 from app.schema.normalization_model import NormalizationReport, ColumnNormalizationReport
 from app.normalizer.detectors import (
     PhoneDetector, EmailDetector, DateDetector,
-    BooleanDetector, EnumDetector, CurrencyDetector
+    BooleanDetector, CurrencyDetector
 )
 
 # 导入外部库

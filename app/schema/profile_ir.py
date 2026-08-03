@@ -36,7 +36,7 @@ class ColumnProfileIR(BaseModel):
         default_factory=dict, 
         description="高频值 Top 5 及其出现次数，如 {'ABC': 150, 'XYZ': 80}"
     )
-    samples: List[Any] = Field(default_factory=list, max_items=5, description="前5个非空样本")
+    samples: List[Any] = Field(default_factory=list, max_length=5, description="前5个非空样本")
     
     # ---------- 候选数据类型（新增） ----------
     candidate_types: List[str] = Field(
@@ -94,4 +94,4 @@ class ColumnProfileIR(BaseModel):
     _value_set: Optional[Set[Any]] = None
     
     class Config:
-        arbitrary_types_allowed = True
+        model_config = {"arbitrary_types_allowed": True}

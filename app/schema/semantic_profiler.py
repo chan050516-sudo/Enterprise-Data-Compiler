@@ -52,12 +52,21 @@ class SemanticProfiler:
         核心方法：生成 IR-0 列画像列表。
         采样机制防止 OOM，适用于大型数据集。
         """
-        total_rows = len(df)
-        if total_rows > max_sample_rows:
-            logger.info(f"Profiling sampling {max_sample_rows} rows from {total_rows}")
+        original_total_rows = len(df)
+        if original_total_rows > max_sample_rows:
+            logger.info(f"Profiling sampling {max_sample_rows} rows from {original_total_rows}")
             working_df = df.sample(n=max_sample_rows, random_state=42)
         else:
             working_df = df
+
+        DEFAULT_MORPH = {
+            'numeric_density': 0.0,
+            'length_std': 0.0,
+            'separator_profile': {},
+            'decimal_place_mode': None,
+            'value_fingerprint_clusters': {},
+            'cluster_coverage': 0.0,
+        }
 
         profiles = []
         for col in working_df.columns:
@@ -69,7 +78,14 @@ class SemanticProfiler:
             total_count = len(series)
 
             # 1. 基础类型判断
-            if pd.api.types.is_numeric_dtype(series):
+            if pd.api.types.is_bool_dtype(series):
+                data_type = "boolean"
+                percentiles = None
+                min_val = max_val = mean_val = std_val = None
+                pattern = None
+                avg_len = None
+                max_len = None
+            elif pd.api.types.is_numeric_dtype(series):
                 data_type = "numeric"
                 # 百分位数
                 percentiles = {}
@@ -109,8 +125,8 @@ class SemanticProfiler:
             if valid_count > 0:
                 value_counts = valid_series.value_counts()
                 for val, cnt in value_counts.head(5).items():
-                    # 将值转为字符串，确保可序列化
-                    top_freq[str(val) if not isinstance(val, (int, float)) else val] = int(cnt)
+                    if cnt > 1:  # 只保留出现次数 > 1 的值
+                        top_freq[str(val)] = int(cnt)
 
             # 4. 候选数据类型推断（新增）
             candidate_types = []
@@ -140,16 +156,26 @@ class SemanticProfiler:
             morph_features = {}
             if data_type == "string_or_categorical" and valid_count > 0:
                 morph_features = cls._extract_morphological_features(valid_series)
+                for key in DEFAULT_MORPH:
+                    if key not in morph_features:
+                        morph_features[key] = DEFAULT_MORPH[key]
             else:
-                # 数值列或空列，填充默认值
-                morph_features = {
-                    'numeric_density': 0.0,
-                    'length_std': 0.0,
-                    'separator_profile': {},
-                    'decimal_place_mode': None,
-                    'value_fingerprint_clusters': {},
-                    'cluster_coverage': 0.0,
-                }
+                morph_features = DEFAULT_MORPH.copy()
+
+            if data_type == "numeric" and valid_count > 0:
+                decimals = []
+                sample_vals = valid_series.head(200)
+                for val in sample_vals:
+                    if pd.api.types.is_integer_dtype(valid_series):
+                        decimals.append(0)
+                    else:
+                        s = str(val)
+                        if '.' in s:
+                            decimals.append(len(s.split('.')[1]))
+                        else:
+                            decimals.append(0)
+                if decimals:
+                    morph_features['decimal_place_mode'] = Counter(decimals).most_common(1)[0][0]
 
             # ---------- pandas-type-detector 检测 ----------
             detected_type = None
@@ -178,7 +204,7 @@ class SemanticProfiler:
                 unique_ratio=round(unique_ratio, 4),
                 duplicate_ratio=duplicate_ratio,      # 新增
                 distinct_count=unique_count,
-                total_count=total_count,
+                total_count=original_total_rows,
                 min=min_val,
                 max=max_val,
                 mean=mean_val,
@@ -319,7 +345,9 @@ class SemanticProfiler:
         if series.empty:
             return None
         probs = series.value_counts(normalize=True)
-        if len(probs) <= 1:
+        if len(probs) == 0:          # 全部为 NaN
+            return None
+        if len(probs) == 1:
             return 0.0
         return round(-sum(p * math.log2(p) for p in probs if p > 0), 4)
 
