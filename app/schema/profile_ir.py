@@ -124,6 +124,22 @@ class ColumnProfileIR(BaseModel):
     detection_confidence: Optional[float] = None
     detected_format: Optional[str] = None
 
+    # Duckling 实体指纹
+    duckling_entities: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Duckling 提取的自然语言实体，如时间、货币、距离等"
+    )
+    duckling_entity_coverage: Optional[float] = Field(
+        default=None,
+        description="至少匹配一个 Duckling 实体的行数占比"
+    )
+
+    # Presidio 检测结果
+    presidio_entities: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Presidio 检测到的 PII 实体"
+    )
+
     # ---------- 内部缓存 ----------
     _value_set: Optional[Set[Any]] = None
 

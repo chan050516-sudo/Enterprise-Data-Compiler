@@ -14,6 +14,21 @@ except ImportError:
     HAS_PANDAS_TYPE_DETECTOR = False
     TypeDetectionPipeline = None
 
+try:
+    from fb_duckling import Duckling
+    HAS_DUCKLING = True
+except ImportError:
+    HAS_DUCKLING = False
+    Duckling = None
+
+try:
+    from presidio_analyzer import AnalyzerEngine
+    HAS_PRESIDIO = True
+except ImportError:
+    HAS_PRESIDIO = False
+    AnalyzerEngine = None
+
+
 logger = logging.getLogger(__name__)
 
 class SemanticProfiler:
@@ -146,6 +161,12 @@ class SemanticProfiler:
                 valid_series
             )
 
+            # ----- 13. Duckling 实体提取（Phase 1C） -----
+            duckling_entities, duckling_coverage = cls._extract_duckling_entities(valid_series)
+
+            # ----- 14. Presidio PII 检测（Phase 1C） -----
+            presidio_entities, presidio_coverage = cls._extract_presidio_entities(valid_series)
+
             # ----- 构建 Profile -----
             profile = ColumnProfileIR(
                 column_name=col,
@@ -194,6 +215,9 @@ class SemanticProfiler:
                 detected_type=detected_type,
                 detection_confidence=detection_confidence,
                 detected_format=detected_format,
+                duckling_entities=duckling_entities,
+                duckling_entity_coverage=duckling_coverage,
+                presidio_entities=presidio_entities,
                 # 内部缓存
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )
@@ -505,6 +529,101 @@ class SemanticProfiler:
             'value_fingerprint_clusters': clusters,
             'cluster_coverage': cluster_coverage,
         }
+
+        _duckling = None
+
+    @classmethod
+    def _get_duckling(cls):
+        if cls._duckling is None and HAS_DUCKLING:
+            cls._duckling = Duckling()
+        return cls._duckling
+
+    @classmethod
+    def _extract_duckling_entities(cls, valid_series: pd.Series) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+        """
+        使用 Duckling 从文本中提取自然语言实体。
+        返回: (entities_list, coverage)
+        """
+        if not HAS_DUCKLING or len(valid_series) == 0:
+            return [], None
+
+        duckling = cls._get_duckling()
+        if duckling is None:
+            return [], None
+
+        # 采样前 200 行（避免性能问题）
+        sample = valid_series.astype(str).head(200)
+        all_entities = []
+        matched_count = 0
+
+        for val in sample:
+            if pd.isna(val) or val == '':
+                continue
+            try:
+                # Duckling 解析
+                result = duckling.parse(val)
+                if result:
+                    matched_count += 1
+                    # 提取实体类型和值
+                    for entity in result:
+                        all_entities.append({
+                            'text': val[:100],  # 截断长文本
+                            'dimension': entity.get('dim'),
+                            'value': entity.get('value'),
+                            'start': entity.get('start'),
+                            'end': entity.get('end'),
+                        })
+            except Exception as e:
+                logger.debug(f"Duckling parsing failed for '{val[:50]}': {e}")
+
+        coverage = matched_count / len(sample) if len(sample) > 0 else 0.0
+        return all_entities[:100], round(coverage, 4)  # 限制返回数量
+
+    _presidio = None
+
+    @classmethod
+    def _get_presidio(cls):
+        if cls._presidio is None and HAS_PRESIDIO:
+            cls._presidio = AnalyzerEngine()
+        return cls._presidio
+
+    @classmethod
+    def _extract_presidio_entities(cls, valid_series: pd.Series) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+        """
+        使用 Presidio 从文本中检测 PII 实体。
+        返回: (entities_list, coverage)
+        """
+        if not HAS_PRESIDIO or len(valid_series) == 0:
+            return [], None
+
+        analyzer = cls._get_presidio()
+        if analyzer is None:
+            return [], None
+
+        sample = valid_series.astype(str).head(200)
+        all_entities = []
+        matched_count = 0
+
+        for val in sample:
+            if pd.isna(val) or val == '':
+                continue
+            try:
+                result = analyzer.analyze(text=val, language='en')
+                if result:
+                    matched_count += 1
+                    for entity in result:
+                        all_entities.append({
+                            'text': val[:100],
+                            'entity_type': entity.entity_type,
+                            'confidence': entity.score,
+                            'start': entity.start,
+                            'end': entity.end,
+                        })
+            except Exception as e:
+                logger.debug(f"Presidio analysis failed for '{val[:50]}': {e}")
+
+        coverage = matched_count / len(sample) if len(sample) > 0 else 0.0
+        return all_entities[:100], round(coverage, 4)
 
     # ================================================================
     # 保持兼容的公共方法
