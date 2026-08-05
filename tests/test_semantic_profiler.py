@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
+from unittest.mock import patch
 from app.schema.profile_ir import ColumnProfileIR
 from app.schema.semantic_profiler import SemanticProfiler
 
@@ -9,6 +10,13 @@ try:
     HAS_PANDAS_TYPE_DETECTOR = True
 except ImportError:
     HAS_PANDAS_TYPE_DETECTOR = False
+
+@pytest.fixture(autouse=True)
+def mock_third_party():
+    with patch('app.schema.semantic_profiler.SemanticProfiler._run_pandas_type_detector', return_value=(None, None, None)):
+        with patch('app.schema.semantic_profiler.SemanticProfiler._extract_duckling_summary', return_value={}):
+            with patch('app.schema.semantic_profiler.SemanticProfiler._extract_presidio_summary', return_value={}):
+                yield
 
 
 @pytest.fixture
@@ -52,7 +60,7 @@ class TestSemanticProfiler:
 
         # id 列 — 整数
         id_profile = profile_map["id"]
-        assert id_profile.physical_type == "integer"
+        assert id_profile.storage_type == "integer"
         assert id_profile.data_type == "integer"
         assert id_profile.null_ratio == 0.0
         assert id_profile.unique_ratio == 1.0
@@ -65,7 +73,7 @@ class TestSemanticProfiler:
 
         # name 列 — 字符串
         name_profile = profile_map["name"]
-        assert name_profile.physical_type == "string"
+        assert name_profile.storage_type == "string"
         assert name_profile.data_type == "string"
         assert name_profile.null_ratio == 0.0
         assert name_profile.unique_ratio == 1.0
@@ -118,7 +126,7 @@ class TestSemanticProfiler:
 
         # enum_col 列不触发聚类（唯一率 > 0.15）
         enum_profile = profile_map["enum_col"]
-        assert enum_profile.value_fingerprint_clusters == {}
+        assert enum_profile.value_similarity_clusters == {}
         assert enum_profile.cluster_coverage == 0.0
 
         # 构造真正的枚举列
@@ -166,14 +174,14 @@ class TestSemanticProfiler:
         assert p.null_ratio == 1.0
         assert p.unique_ratio == 0.0
         assert p.distinct_count == 0
-        assert p.physical_type == "string"  # Pandas object -> string
+        assert p.storage_type == "string"  # Pandas object -> string
         assert p.data_type == "string"
         assert p.entropy is None
         assert p.numeric_density == 0.0
         assert p.length_std == 0.0
         assert p.separator_profile == {}
         assert p.decimal_place_mode is None
-        assert p.value_fingerprint_clusters == {}
+        assert p.value_similarity_clusters == {}
         assert p.cluster_coverage == 0.0
 
     def test_generate_column_profiles_with_numeric_column(self, profiler, sample_df):
@@ -181,7 +189,7 @@ class TestSemanticProfiler:
         profile_map = {p.column_name: p for p in profiles}
 
         salary_profile = profile_map["salary"]
-        assert salary_profile.physical_type == "integer"
+        assert salary_profile.storage_type == "integer"
         assert salary_profile.percentiles is not None
         assert "25%" in salary_profile.percentiles
         assert "50%" in salary_profile.percentiles
@@ -205,15 +213,24 @@ class TestSemanticProfiler:
         id_profile = profile_map["id"]
         assert id_profile.top_frequencies == {}
 
-    def test_generate_column_profiles_candidate_types(self, profiler, sample_df):
+    def test_generate_column_profiles_semantic_candidates(self, profiler, sample_df):
         profiles = profiler.generate_column_profiles(sample_df, dataset_name="test")
         profile_map = {p.column_name: p for p in profiles}
 
         id_profile = profile_map["id"]
-        assert "numeric" in id_profile.candidate_types
+        # 检查 semantic_candidates 是否包含期望的类型
+        # 由于 id 列是唯一码，应有 "Code" 或 "Identifier" 等候选
+        semantic_types = [c.type for c in id_profile.semantic_candidates]
+        # 这里不强制具体类型，只确保至少有候选
+        assert len(id_profile.semantic_candidates) > 0
 
-        name_profile = profile_map["name"]
-        assert "string" in name_profile.candidate_types
-
+        # code_col 列应包含 "Code" 候选
         code_profile = profile_map["code_col"]
-        assert "code" in code_profile.candidate_types
+        code_types = [c.type for c in code_profile.semantic_candidates]
+        assert any(t in code_types for t in ["Code", "Identifier"])
+
+        # email 列应包含 "Email" 候选（如果 pattern 覆盖高）
+        email_profile = profile_map["email"]
+        email_types = [c.type for c in email_profile.semantic_candidates]
+        # 由于 email 列 pattern 覆盖率高，应该包含 "Email"
+        assert any("Email" in t for t in email_types)

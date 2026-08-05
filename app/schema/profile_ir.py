@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Dict, Set
 import pandas as pd
 
@@ -10,6 +10,19 @@ class PatternFingerprint(BaseModel):
     coverage: float    # 匹配该模式的行数 / 总行数
 
 
+class SemanticCandidate(BaseModel):
+    """语义候选（带置信度和证据链）"""
+    type: str                # 语义类型名称，如 "CustomerID", "PhoneNumber"
+    confidence: float        # 0-1，置信度
+    evidence: List[str]      # 支持此候选的证据列表，如 ["unique_ratio>0.95", "column_name_match"]
+
+
+class EntitySummary(BaseModel):
+    """第三方实体检测摘要（Duckling / Presidio）"""
+    coverage: float          # 该实体类型覆盖的行数占比
+    avg_confidence: float    # 平均检测置信度
+
+
 class ColumnProfileIR(BaseModel):
     """IR-0: 标准化列画像（Phase 1 输出）- 增强版"""
 
@@ -19,34 +32,31 @@ class ColumnProfileIR(BaseModel):
     table_name: Optional[str] = None
 
     # =========================================================================
-    # 物理类型（来自 Pandas dtype）
+    # 存储与逻辑类型
     # =========================================================================
-    physical_type: str = Field(
+    storage_type: str = Field(
         default="string",
-        description="物理类型: 'integer', 'float', 'boolean', 'string', 'datetime', 'date'"
+        description="存储类型: 'integer', 'float', 'boolean', 'string', 'datetime', 'date'"
     )
-
-    # =========================================================================
-    # 逻辑类型（由形态特征推断）
-    # =========================================================================
     logical_type: str = Field(
         default="unknown",
         description="逻辑类型: 'fixed_length_code', 'variable_length_code', 'date_like', "
-                    "'numeric_like', 'free_text', 'enum_like', 'identifier'"
+                    "'numeric_like', 'free_text', 'enum_like', 'identifier', "
+                    "'email_like', 'phone_like', 'uuid_like', 'url_like'"
     )
 
     # =========================================================================
-    # 语义候选（带置信度）
+    # 语义候选
     # =========================================================================
-    semantic_candidates: List[Dict[str, float]] = Field(
+    semantic_candidates: List[SemanticCandidate] = Field(
         default_factory=list,
-        description="语义候选列表，如 [{'customer_id': 0.85}, {'phone': 0.7}]"
+        description="语义候选列表，每个候选包含类型、置信度和证据链"
     )
 
     # ---------- 基础统计（保留原有） ----------
     data_type: str = Field(
         default="string",
-        description="[Deprecated] 保留向后兼容，请使用 physical_type + logical_type"
+        description="[Deprecated] 保留向后兼容，请使用 storage_type"
     )
     null_ratio: float
     unique_ratio: float
@@ -92,7 +102,7 @@ class ColumnProfileIR(BaseModel):
     )
     structural_signature: Optional[str] = Field(
         default=None,
-        description="列中最常见的结构签名，如 'AAA-999'"
+        description="[Deprecated] 最常见的结构签名，如 'AAA-999'，建议使用 structural_signature_detail"
     )
     pattern_fingerprints: List[PatternFingerprint] = Field(
         default_factory=list,
@@ -111,37 +121,46 @@ class ColumnProfileIR(BaseModel):
         description="Top 20 高频值占总行数的比例（基于非空值）"
     )
 
-    # ---------- 形态学特征（保留） ----------
+    # ---------- 形态学特征 ----------
     numeric_density: Optional[float] = None
     length_std: Optional[float] = None
     separator_profile: Optional[Dict[str, float]] = None
     decimal_place_mode: Optional[int] = None
-    value_fingerprint_clusters: Optional[Dict[str, int]] = None
-    cluster_coverage: Optional[float] = None
+    length_entropy: Optional[float] = None
+    structural_signature_detail: Optional[Dict[str, Any]] = None
+    value_range_profile: Optional[Dict[str, Any]] = None
+
+    # =========================================================================
+    # Phase 1C: 值相似度聚类（从 morphology 移出）
+    # =========================================================================
+    value_similarity_clusters: Dict[str, int] = Field(
+        default_factory=dict,
+        description="值相似度聚类结果（OpenRefine 指纹风格）：{fingerprint: count}"
+    )
+    cluster_coverage: Optional[float] = Field(
+        default=None,
+        description="被聚类覆盖的行数占比"
+    )
+
+    # =========================================================================
+    # Phase 1C: 第三方实体检测摘要
+    # =========================================================================
+    duckling_summary: Dict[str, EntitySummary] = Field(
+        default_factory=dict,
+        description="Duckling 实体摘要：{entity_type: EntitySummary}"
+    )
+    presidio_summary: Dict[str, EntitySummary] = Field(
+        default_factory=dict,
+        description="Presidio PII 摘要：{entity_type: EntitySummary}"
+    )
 
     # ---------- pandas-type-detector 结果 ----------
     detected_type: Optional[str] = None
     detection_confidence: Optional[float] = None
     detected_format: Optional[str] = None
 
-    # Duckling 实体指纹
-    duckling_entities: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Duckling 提取的自然语言实体，如时间、货币、距离等"
-    )
-    duckling_entity_coverage: Optional[float] = Field(
-        default=None,
-        description="至少匹配一个 Duckling 实体的行数占比"
-    )
-
-    # Presidio 检测结果
-    presidio_entities: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Presidio 检测到的 PII 实体"
-    )
-
     # ---------- 内部缓存 ----------
     _value_set: Optional[Set[Any]] = None
 
     class Config:
-        arbitrary_types_allowed = True
+        model_config = ConfigDict(arbitrary_types_allowed=True)

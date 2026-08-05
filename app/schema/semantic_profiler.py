@@ -4,8 +4,8 @@ import math
 import logging
 import re
 from collections import Counter
-from typing import Dict, Any, List, Optional, Tuple
-from app.schema.profile_ir import ColumnProfileIR, PatternFingerprint
+from typing import Dict, Any, List, Optional, Tuple, Set
+from app.schema.profile_ir import ColumnProfileIR, PatternFingerprint, SemanticCandidate, EntitySummary
 
 try:
     from pandas_type_detector import TypeDetectionPipeline
@@ -14,34 +14,16 @@ except ImportError:
     HAS_PANDAS_TYPE_DETECTOR = False
     TypeDetectionPipeline = None
 
-try:
-    from fb_duckling import Duckling
-    HAS_DUCKLING = True
-except ImportError:
-    HAS_DUCKLING = False
-    Duckling = None
-
-try:
-    from presidio_analyzer import AnalyzerEngine
-    HAS_PRESIDIO = True
-except ImportError:
-    HAS_PRESIDIO = False
-    AnalyzerEngine = None
+HAS_DUCKLING = False
+HAS_PRESIDIO = False
 
 
 logger = logging.getLogger(__name__)
 
+
 class SemanticProfiler:
     """
     Phase 1: Semantic Profiler - 生成 IR-0 列画像，包含多维度指纹
-    
-    核心输出:
-    - physical_type: Pandas 物理类型 (integer, float, string, boolean, datetime)
-    - logical_type: 形态推断的逻辑类型 (fixed_length_code, date_like, enum_like, etc.)
-    - pattern_fingerprints: 所有检测到的模式 (带置信度和覆盖率)
-    - 分布特征: singleton_ratio, top_10/20_coverage
-    - 形态特征: numeric_density, length_std, separator_profile, structural_signature
-    - 熵: value_entropy, character_entropy
     """
     
     # 模式检测正则（可扩展）
@@ -57,12 +39,78 @@ class SemanticProfiler:
     }
 
     _type_detector = None
+    _duckling = None
+    _presidio = None
 
     @classmethod
     def _get_type_detector(cls):
         if cls._type_detector is None and HAS_PANDAS_TYPE_DETECTOR:
             cls._type_detector = TypeDetectionPipeline(locale="en-us")
         return cls._type_detector
+
+    @classmethod
+    def _get_duckling(cls):
+        if cls._duckling is None:
+            try:
+                from fb_duckling import Duckling
+                cls._duckling = Duckling()
+                # 成功导入后设置全局标志（可选）
+                global HAS_DUCKLING
+                HAS_DUCKLING = True
+            except ImportError:
+                cls._duckling = None
+                logger.warning("fb-duckling not installed")
+            except Exception as e:
+                cls._duckling = None
+                logger.warning(f"Failed to initialize Duckling: {e}")
+        return cls._duckling
+
+    @classmethod
+    def _get_presidio(cls):
+        if cls._presidio is None:
+            try:
+                from presidio_analyzer import AnalyzerEngine
+                cls._presidio = AnalyzerEngine()
+                global HAS_PRESIDIO
+                HAS_PRESIDIO = True
+            except ImportError:
+                cls._presidio = None
+                logger.warning("presidio-analyzer not installed")
+            except Exception as e:
+                cls._presidio = None
+                logger.warning(f"Failed to initialize Presidio: {e}")
+        return cls._presidio
+
+    @classmethod
+    def preload_all_detectors(cls) -> None:
+        """在应用启动时预加载所有检测器，避免运行时阻塞"""
+        logger.info("Preloading all detectors...")
+        
+        # 1. 预加载 pandas-type-detector
+        try:
+            cls._get_type_detector()
+            logger.info("  - pandas-type-detector loaded")
+        except Exception as e:
+            logger.warning(f"  - pandas-type-detector failed: {e}")
+        
+        # 2. 预加载 Duckling
+        try:
+            cls._get_duckling()
+            logger.info("  - Duckling loaded")
+        except Exception as e:
+            logger.warning(f"  - Duckling failed: {e}")
+        
+        # 3. 预加载 Presidio（需要显式初始化）
+        try:
+            analyzer = cls._get_presidio()
+            # 触发一次空分析来加载模型
+            if analyzer:
+                analyzer.analyze(text="test", language='en')
+            logger.info("  - Presidio loaded")
+        except Exception as e:
+            logger.warning(f"  - Presidio failed: {e}")
+        
+        logger.info("All detectors preloaded.")
 
     @classmethod
     def generate_column_profiles(
@@ -86,7 +134,7 @@ class SemanticProfiler:
             'length_std': 0.0,
             'separator_profile': {},
             'decimal_place_mode': None,
-            'value_fingerprint_clusters': {},
+            'value_fingerprint_clusters': {},  # 保留兼容，但不会再使用
             'cluster_coverage': 0.0,
         }
 
@@ -98,38 +146,35 @@ class SemanticProfiler:
             null_count = len(series) - valid_count
             total_count = len(series)
 
-            # ----- 1. 物理类型 -----
-            physical_type = cls._infer_physical_type(series)
+            # ----- 1. 存储类型 -----
+            storage_type = cls._infer_storage_type(series)
 
             # ----- 2. 统计特征 -----
             stats = cls._compute_basic_stats(valid_series, total_count)
 
-            # ----- 3. 逻辑类型 -----
-            logical_type = cls._infer_logical_type(valid_series, stats)
-
-            # ----- 4. 模式指纹 -----
+            # ----- 3. 模式指纹（先做，供 logical_type 使用） -----
             pattern_fingerprints = cls._detect_pattern_fingerprints(valid_series)
 
+            # ----- 4. 逻辑类型（传入 pattern_fingerprints 避免重复正则） -----
+            logical_type = cls._infer_logical_type(valid_series, stats, pattern_fingerprints)
+
             # ----- 5. 结构签名 -----
-            structural_signature = cls._compute_structural_signature(valid_series)
+            structural_signature_simple = cls._compute_structural_signature(valid_series)
+            structural_signature_detail = cls._compute_structural_signature_detail(valid_series)
 
             # ----- 6. 熵 -----
             value_entropy = cls._compute_entropy(valid_series)
             character_entropy = cls._compute_character_entropy(valid_series)
+            length_entropy = cls._compute_length_entropy(valid_series)
 
             # ----- 7. 分布特征 -----
             top_freq, top_10_cov, top_20_cov, singleton_ratio = cls._compute_distribution_features(
                 valid_series
             )
 
-            # ----- 8. 候选语义类型 -----
-            candidate_types = cls._infer_candidate_types(
-                physical_type, logical_type, pattern_fingerprints, col
-            )
-
-            # ----- 9. 形态学特征 -----
+            # ----- 8. 形态学特征 -----
             morph_features = {}
-            if physical_type == "string" and valid_count > 0:
+            if storage_type == "string" and valid_count > 0:
                 morph_features = cls._extract_morphological_features(valid_series)
                 for key in DEFAULT_MORPH:
                     if key not in morph_features:
@@ -137,8 +182,8 @@ class SemanticProfiler:
             else:
                 morph_features = DEFAULT_MORPH.copy()
 
-            # ----- 10. 对数值列补充小数位数模式 -----
-            if physical_type in ["integer", "float"] and valid_count > 0:
+            # 数值列补充 decimal_place_mode
+            if storage_type in ["integer", "float"] and valid_count > 0:
                 decimals = []
                 sample_vals = valid_series.head(200)
                 for val in sample_vals:
@@ -153,30 +198,41 @@ class SemanticProfiler:
                 if decimals:
                     morph_features['decimal_place_mode'] = Counter(decimals).most_common(1)[0][0]
 
-            # ----- 11. 分层采样 -----
+            # 值范围画像（针对字符串列）
+            value_range_profile = None
+            if storage_type == "string" and valid_count > 0:
+                value_range_profile = cls._compute_value_range_profile(valid_series)
+
+            # ----- 9. 值相似度聚类（独立） -----
+            value_similarity_clusters, cluster_coverage = cls._compute_value_similarity_clusters(valid_series)
+
+            # ----- 10. 分层采样 -----
             samples = cls._stratified_sample(valid_series)
+
+            # ----- 11. 第三方检测摘要（使用统一采样） -----
+            duckling_summary = cls._extract_duckling_summary(valid_series)
+            presidio_summary = cls._extract_presidio_summary(valid_series)
 
             # ----- 12. pandas-type-detector 检测 -----
             detected_type, detection_confidence, detected_format = cls._run_pandas_type_detector(
                 valid_series
             )
 
-            # ----- 13. Duckling 实体提取（Phase 1C） -----
-            duckling_entities, duckling_coverage = cls._extract_duckling_entities(valid_series)
-
-            # ----- 14. Presidio PII 检测（Phase 1C） -----
-            presidio_entities, presidio_coverage = cls._extract_presidio_entities(valid_series)
+            # ----- 13. 语义候选 -----
+            semantic_candidates = cls._infer_semantic_candidates(
+                storage_type, logical_type, pattern_fingerprints, col, stats
+            )
 
             # ----- 构建 Profile -----
             profile = ColumnProfileIR(
                 column_name=col,
                 dataset_name=dataset_name,
-                # 核心类型系统
-                physical_type=physical_type,
+                # 核心类型
+                storage_type=storage_type,
                 logical_type=logical_type,
-                semantic_candidates=[],
-                # 旧字段保留（但直接映射到 physical_type）
-                data_type=physical_type,
+                semantic_candidates=semantic_candidates,
+                # 旧字段兼容
+                data_type=storage_type,
                 # 基础统计
                 null_ratio=null_count / total_count if total_count > 0 else 1.0,
                 unique_ratio=stats['unique_ratio'],
@@ -195,19 +251,23 @@ class SemanticProfiler:
                 # 分布与采样
                 top_frequencies=top_freq,
                 samples=samples,
-                candidate_types=candidate_types,
+                candidate_types=[],  # 逐步废弃
                 entropy=value_entropy,
-                # 形态特征
+                # 形态
                 numeric_density=morph_features['numeric_density'],
                 length_std=morph_features['length_std'],
                 separator_profile=morph_features['separator_profile'],
                 decimal_place_mode=morph_features['decimal_place_mode'],
-                value_fingerprint_clusters=morph_features['value_fingerprint_clusters'],
-                cluster_coverage=morph_features['cluster_coverage'],
+                length_entropy=length_entropy,
+                structural_signature=structural_signature_simple,
+                structural_signature_detail=structural_signature_detail,
+                value_range_profile=value_range_profile,
+                # 值相似度
+                value_similarity_clusters=value_similarity_clusters,
+                cluster_coverage=cluster_coverage,
                 # 新指纹
                 singleton_ratio=singleton_ratio,
                 character_entropy=character_entropy,
-                structural_signature=structural_signature,
                 pattern_fingerprints=pattern_fingerprints,
                 top_10_coverage=top_10_cov,
                 top_20_coverage=top_20_cov,
@@ -215,9 +275,8 @@ class SemanticProfiler:
                 detected_type=detected_type,
                 detection_confidence=detection_confidence,
                 detected_format=detected_format,
-                duckling_entities=duckling_entities,
-                duckling_entity_coverage=duckling_coverage,
-                presidio_entities=presidio_entities,
+                duckling_summary=duckling_summary,
+                presidio_summary=presidio_summary,
                 # 内部缓存
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )
@@ -231,7 +290,7 @@ class SemanticProfiler:
     # ================================================================
 
     @classmethod
-    def _infer_physical_type(cls, series: pd.Series) -> str:
+    def _infer_storage_type(cls, series: pd.Series) -> str:
         if pd.api.types.is_bool_dtype(series):
             return "boolean"
         if pd.api.types.is_integer_dtype(series):
@@ -258,7 +317,6 @@ class SemanticProfiler:
         unique_ratio = unique_count / valid_count
         duplicate_ratio = round(1 - unique_ratio, 4)
 
-        # 数值型统计（仅对真正的数值列）
         if pd.api.types.is_numeric_dtype(valid_series) and not pd.api.types.is_bool_dtype(valid_series):
             min_val = float(valid_series.min())
             max_val = float(valid_series.max())
@@ -271,7 +329,6 @@ class SemanticProfiler:
         else:
             min_val = max_val = mean_val = std_val = percentiles = None
 
-        # 文本长度（对所有类型都适用）
         str_series = valid_series.astype(str)
         avg_length = float(str_series.str.len().mean())
         max_length = int(str_series.str.len().max())
@@ -290,9 +347,22 @@ class SemanticProfiler:
         }
 
     @classmethod
-    def _infer_logical_type(cls, valid_series: pd.Series, stats: Dict) -> str:
+    def _infer_logical_type(cls, valid_series: pd.Series, stats: Dict, pattern_fingerprints: List[PatternFingerprint]) -> str:
         if len(valid_series) == 0:
             return "empty"
+
+        # 优先检查高置信度 pattern
+        high_conf_patterns = {
+            "date_iso": 0.8,
+            "email": 0.8,
+            "uuid": 0.9,
+            "phone": 0.7,
+            "url": 0.7,
+        }
+        for fp in pattern_fingerprints:
+            threshold = high_conf_patterns.get(fp.pattern_name, 0.7)
+            if fp.coverage > threshold:
+                return f"{fp.pattern_name}_like"
 
         str_series = valid_series.astype(str)
         lengths = str_series.str.len()
@@ -311,29 +381,40 @@ class SemanticProfiler:
             return "enum_like"
         if avg_digit_ratio < 0.2 and unique_ratio > 0.3:
             return "free_text"
-        # 日期检测
-        date_pattern = r'^\d{4}[-/.]\d{2}[-/.]\d{2}|\d{2}[-/.]\d{2}[-/.]\d{4}'
-        if str_series.str.match(date_pattern).mean() > 0.8:
-            return "date_like"
         return "unknown"
 
     @classmethod
     def _detect_pattern_fingerprints(cls, valid_series: pd.Series) -> List[PatternFingerprint]:
         if len(valid_series) == 0:
             return []
+
         str_series = valid_series.astype(str)
         total = len(str_series)
         fingerprints = []
+
+        thresholds = {
+            "email": 0.8,
+            "date_iso": 0.75,
+            "uuid": 0.9,
+            "phone": 0.7,
+            "currency_code": 0.5,
+            "url": 0.7,
+            "ipv4": 0.6,
+            "hex_color": 0.5,
+        }
+
         for name, regex in cls._PATTERN_REGEXES.items():
             matches = str_series.str.match(regex).sum()
             coverage = matches / total if total > 0 else 0.0
-            if coverage > 0.1:
+            min_threshold = thresholds.get(name, 0.5)
+            if coverage > min_threshold:
                 confidence = min(0.6 + coverage * 0.4, 0.99)
                 fingerprints.append(PatternFingerprint(
                     pattern_name=name,
                     confidence=confidence,
-                    coverage=coverage
+                    coverage=round(coverage, 4)
                 ))
+
         fingerprints.sort(key=lambda x: -x.coverage)
         return fingerprints
 
@@ -356,6 +437,65 @@ class SemanticProfiler:
         if signatures.empty:
             return None
         return signatures.value_counts().index[0]
+
+    @classmethod
+    def _compute_structural_signature_detail(cls, valid_series: pd.Series) -> Optional[Dict[str, Any]]:
+        if len(valid_series) == 0:
+            return None
+
+        def signature(s: str) -> str:
+            result = []
+            # 用 count 表示连续相同类型，如 AAA-999 -> A{3}-9{3}
+            last_char = None
+            count = 0
+            for ch in s:
+                if ch.isalpha():
+                    type_char = 'A'
+                elif ch.isdigit():
+                    type_char = '9'
+                else:
+                    type_char = ch
+                if type_char == last_char:
+                    count += 1
+                else:
+                    if last_char is not None:
+                        result.append(f"{last_char}{{{count}}}" if count > 1 else last_char)
+                    last_char = type_char
+                    count = 1
+            if last_char is not None:
+                result.append(f"{last_char}{{{count}}}" if count > 1 else last_char)
+            return ''.join(result)
+
+        def char_class_counts(s: str) -> Dict[str, int]:
+            counts = {'digit': 0, 'alpha': 0, 'separator': 0, 'other': 0}
+            for ch in s:
+                if ch.isdigit():
+                    counts['digit'] += 1
+                elif ch.isalpha():
+                    counts['alpha'] += 1
+                elif ch in '-/._ ':
+                    counts['separator'] += 1
+                else:
+                    counts['other'] += 1
+            return counts
+
+        str_series = valid_series.astype(str)
+        signatures = str_series.apply(signature)
+        if signatures.empty:
+            return None
+
+        most_common = signatures.value_counts().index[0]
+        # 取匹配该签名的第一个样本
+        sample_val = str_series[signatures == most_common].iloc[0]
+        char_classes = char_class_counts(sample_val)
+        total = sum(char_classes.values())
+        char_class_ratio = {k: round(v/total, 4) for k, v in char_classes.items()} if total > 0 else {}
+
+        return {
+            'signature': most_common,
+            'char_class_ratio': char_class_ratio,
+            'coverage': round(signatures.value_counts().max() / len(signatures), 4)
+        }
 
     @classmethod
     def _compute_entropy(cls, valid_series: pd.Series) -> Optional[float]:
@@ -381,6 +521,18 @@ class SemanticProfiler:
         return round(-sum(p * math.log2(p) for p in probs if p > 0), 4)
 
     @classmethod
+    def _compute_length_entropy(cls, valid_series: pd.Series) -> Optional[float]:
+        if len(valid_series) == 0:
+            return None
+        lengths = valid_series.astype(str).str.len()
+        probs = lengths.value_counts(normalize=True)
+        if len(probs) == 0:
+            return None
+        if len(probs) == 1:
+            return 0.0
+        return round(-sum(p * math.log2(p) for p in probs if p > 0), 4)
+
+    @classmethod
     def _compute_distribution_features(
         cls, valid_series: pd.Series
     ) -> Tuple[Dict[str, int], Optional[float], Optional[float], Optional[float]]:
@@ -401,24 +553,104 @@ class SemanticProfiler:
         return top_freq, round(top_10_coverage, 4), round(top_20_coverage, 4), round(singleton_ratio, 4)
 
     @classmethod
-    def _infer_candidate_types(cls, physical_type: str, logical_type: str,
-                               pattern_fingerprints: List[PatternFingerprint],
-                               col_name: str) -> List[str]:
+    def _compute_value_range_profile(cls, valid_series: pd.Series) -> Optional[Dict[str, Any]]:
+        """针对字符串列，计算值范围画像（leading_zero_ratio, min_length, max_length 等）"""
+        if len(valid_series) == 0:
+            return None
+        str_series = valid_series.astype(str)
+        lengths = str_series.str.len()
+        leading_zero_ratio = str_series.str.match(r'^0+').sum() / len(str_series) if len(str_series) > 0 else 0.0
+        return {
+            'min_length': int(lengths.min()),
+            'max_length': int(lengths.max()),
+            'leading_zero_ratio': round(leading_zero_ratio, 4)
+        }
+
+    @classmethod
+    def _compute_value_similarity_clusters(cls, valid_series: pd.Series) -> Tuple[Dict[str, int], float]:
+        if len(valid_series) == 0:
+            return {}, 0.0
+
+        sample = valid_series.astype(str)
+        unique_ratio = sample.nunique() / len(sample) if len(sample) > 0 else 1.0
+
+        if unique_ratio >= 0.15 or len(sample) <= 10:
+            return {}, 0.0
+
+        def fingerprint(s):
+            s = s.lower()
+            s = re.sub(r'[^a-z0-9]', ' ', s)
+            tokens = [t for t in s.split() if len(t) > 1]
+            tokens.sort()
+            return ' '.join(tokens)
+
+        fingerprints = sample.apply(fingerprint)
+        cluster_counts = fingerprints.value_counts()
+        clusters = {}
+        for fp, cnt in cluster_counts.items():
+            if cnt > 1:
+                clusters[fp] = int(cnt)
+        total_clustered = sum(clusters.values())
+        coverage = round(total_clustered / len(sample), 4) if len(sample) > 0 else 0.0
+        return clusters, coverage
+
+    @classmethod
+    def _infer_semantic_candidates(cls, storage_type: str, logical_type: str,
+                                   pattern_fingerprints: List[PatternFingerprint],
+                                   col_name: str, stats: Dict) -> List[SemanticCandidate]:
         candidates = []
-        if physical_type in ["integer", "float"]:
-            candidates.append("numeric")
-            if any(kw in col_name.lower() for kw in ['amount', 'price', 'total', 'fee', 'cost']):
-                candidates.append("currency")
-        else:
-            candidates.append("string")
+        evidence = []
+
+        # 基于列名的证据
+        if any(kw in col_name.lower() for kw in ['id', 'key', 'no', 'code']):
+            evidence.append("column_name_suggests_identifier")
+        if any(kw in col_name.lower() for kw in ['amount', 'price', 'total', 'fee', 'cost']):
+            evidence.append("column_name_suggests_currency")
+
+        # 基于统计的证据
+        if stats['unique_ratio'] > 0.95:
+            evidence.append("high_uniqueness")
+        if stats['unique_ratio'] < 0.05 and stats['distinct_count'] < 20:
+            evidence.append("low_cardinality")
+
+        # 基于模式指纹的证据
         for fp in pattern_fingerprints:
-            if fp.coverage > 0.3:
-                candidates.append(fp.pattern_name)
-        if logical_type == "enum_like":
-            candidates.append("enum")
-        if logical_type in ["fixed_length_code", "variable_length_code"]:
-            candidates.append("code")
-        return list(set(candidates))
+            if fp.coverage > 0.7:
+                cand_type = fp.pattern_name.replace('_like', '').title()
+                cand = SemanticCandidate(
+                    type=cand_type,
+                    confidence=fp.confidence,
+                    evidence=[f"pattern_{fp.pattern_name}_coverage_{fp.coverage}"]
+                )
+                candidates.append(cand)
+
+        # 基于逻辑类型
+        logical_to_semantic = {
+            "fixed_length_code": "Code",
+            "variable_length_code": "Identifier",
+            "enum_like": "Enum",
+            "date_like": "Date",
+            "numeric_like": "NumericValue",
+        }
+        if logical_type in logical_to_semantic:
+            candidates.append(SemanticCandidate(
+                type=logical_to_semantic[logical_type],
+                confidence=0.6,
+                evidence=[f"logical_type_{logical_type}"]
+            ))
+
+        # 去重合并置信度
+        merged = {}
+        for c in candidates:
+            key = c.type
+            if key not in merged:
+                merged[key] = c
+            else:
+                merged[key].confidence = max(merged[key].confidence, c.confidence)
+                merged[key].evidence.extend(c.evidence)
+
+        # 排序返回
+        return sorted(merged.values(), key=lambda x: -x.confidence)[:5]
 
     @classmethod
     def _stratified_sample(cls, valid_series: pd.Series) -> List[Any]:
@@ -459,6 +691,95 @@ class SemanticProfiler:
         except Exception as e:
             logger.debug(f"pandas-type-detector failed: {e}")
             return None, None, None
+
+    @classmethod
+    def _extract_duckling_summary(cls, valid_series: pd.Series) -> Dict[str, EntitySummary]:
+        # if not HAS_DUCKLING or len(valid_series) == 0:
+        #     return {}
+
+        duckling = cls._get_duckling()
+        if duckling is None or len(valid_series) == 0:
+            return {}
+
+        # 使用采样数据
+        sample_texts = valid_series.astype(str).head(200)
+        entity_counts = Counter()
+        matched_count = 0
+        total_confidence = 0.0
+
+        for val in sample_texts:
+            if pd.isna(val) or val == '':
+                continue
+            try:
+                result = duckling.parse(val)
+                if result:
+                    matched_count += 1
+                    for entity in result:
+                        dim = entity.get('dim', 'unknown')
+                        entity_counts[dim] += 1
+                        # 这里无法获取单个实体的置信度，用 1.0 作为近似
+                        total_confidence += 1.0
+            except Exception:
+                pass
+
+        if not entity_counts:
+            return {}
+
+        summary = {}
+        total = len(sample_texts)
+        avg_conf = total_confidence / max(1, sum(entity_counts.values()))
+        for entity_type, count in entity_counts.items():
+            coverage = count / total if total > 0 else 0.0
+            if coverage > 0.05:  # 只保留覆盖率 >5% 的实体
+                summary[entity_type] = EntitySummary(
+                    coverage=round(coverage, 4),
+                    avg_confidence=round(min(avg_conf, 1.0), 4)
+                )
+        return summary
+
+    @classmethod
+    def _extract_presidio_summary(cls, valid_series: pd.Series) -> Dict[str, EntitySummary]:
+        # if not HAS_PRESIDIO or len(valid_series) == 0:
+        #     return {}
+
+        analyzer = cls._get_presidio()
+        if analyzer is None or len(valid_series) == 0:
+            return {}
+
+        sample_texts = valid_series.astype(str).head(200)
+        entity_scores = {}
+        entity_counts = Counter()
+
+        for val in sample_texts:
+            if pd.isna(val) or val == '':
+                continue
+            try:
+                result = analyzer.analyze(text=val, language='en')
+                if result:
+                    for entity in result:
+                        entity_type = entity.entity_type
+                        score = entity.score
+                        if entity_type not in entity_scores:
+                            entity_scores[entity_type] = []
+                        entity_scores[entity_type].append(score)
+                        entity_counts[entity_type] += 1
+            except Exception:
+                pass
+
+        if not entity_scores:
+            return {}
+
+        summary = {}
+        total = len(sample_texts)
+        for entity_type, scores in entity_scores.items():
+            avg_score = sum(scores) / len(scores)
+            if avg_score > 0.3:  # 只保留平均置信度 > 0.3 的实体
+                coverage = entity_counts[entity_type] / total if total > 0 else 0.0
+                summary[entity_type] = EntitySummary(
+                    coverage=round(coverage, 4),
+                    avg_confidence=round(avg_score, 4)
+                )
+        return summary
 
     @classmethod
     def _extract_morphological_features(cls, series: pd.Series) -> Dict[str, Any]:
@@ -503,130 +824,18 @@ class SemanticProfiler:
                 decimal_counts.append(0)
         decimal_place_mode = Counter(decimal_counts).most_common(1)[0][0] if decimal_counts else None
 
-        unique_ratio = sample.nunique() / len(sample) if len(sample) > 0 else 1.0
-        clusters = {}
-        cluster_coverage = 0.0
-        if unique_ratio < 0.15 and len(sample) > 10:
-            def fingerprint(s):
-                s = s.lower()
-                s = re.sub(r'[^a-z0-9]', ' ', s)
-                tokens = [t for t in s.split() if len(t) > 1]
-                tokens.sort()
-                return ' '.join(tokens)
-            fingerprints = sample.apply(fingerprint)
-            cluster_counts = fingerprints.value_counts()
-            for fp, cnt in cluster_counts.items():
-                if cnt > 1:
-                    clusters[fp] = int(cnt)
-            total_clustered = sum(clusters.values())
-            cluster_coverage = round(total_clustered / len(sample), 4) if len(sample) > 0 else 0.0
-
+        # 保留 value_fingerprint_clusters 但不再使用，已移出
         return {
             'numeric_density': numeric_density,
             'length_std': length_std,
             'separator_profile': sep_profile,
             'decimal_place_mode': decimal_place_mode,
-            'value_fingerprint_clusters': clusters,
-            'cluster_coverage': cluster_coverage,
+            'value_fingerprint_clusters': {},
+            'cluster_coverage': 0.0,
         }
 
-        _duckling = None
-
-    @classmethod
-    def _get_duckling(cls):
-        if cls._duckling is None and HAS_DUCKLING:
-            cls._duckling = Duckling()
-        return cls._duckling
-
-    @classmethod
-    def _extract_duckling_entities(cls, valid_series: pd.Series) -> Tuple[List[Dict[str, Any]], Optional[float]]:
-        """
-        使用 Duckling 从文本中提取自然语言实体。
-        返回: (entities_list, coverage)
-        """
-        if not HAS_DUCKLING or len(valid_series) == 0:
-            return [], None
-
-        duckling = cls._get_duckling()
-        if duckling is None:
-            return [], None
-
-        # 采样前 200 行（避免性能问题）
-        sample = valid_series.astype(str).head(200)
-        all_entities = []
-        matched_count = 0
-
-        for val in sample:
-            if pd.isna(val) or val == '':
-                continue
-            try:
-                # Duckling 解析
-                result = duckling.parse(val)
-                if result:
-                    matched_count += 1
-                    # 提取实体类型和值
-                    for entity in result:
-                        all_entities.append({
-                            'text': val[:100],  # 截断长文本
-                            'dimension': entity.get('dim'),
-                            'value': entity.get('value'),
-                            'start': entity.get('start'),
-                            'end': entity.get('end'),
-                        })
-            except Exception as e:
-                logger.debug(f"Duckling parsing failed for '{val[:50]}': {e}")
-
-        coverage = matched_count / len(sample) if len(sample) > 0 else 0.0
-        return all_entities[:100], round(coverage, 4)  # 限制返回数量
-
-    _presidio = None
-
-    @classmethod
-    def _get_presidio(cls):
-        if cls._presidio is None and HAS_PRESIDIO:
-            cls._presidio = AnalyzerEngine()
-        return cls._presidio
-
-    @classmethod
-    def _extract_presidio_entities(cls, valid_series: pd.Series) -> Tuple[List[Dict[str, Any]], Optional[float]]:
-        """
-        使用 Presidio 从文本中检测 PII 实体。
-        返回: (entities_list, coverage)
-        """
-        if not HAS_PRESIDIO or len(valid_series) == 0:
-            return [], None
-
-        analyzer = cls._get_presidio()
-        if analyzer is None:
-            return [], None
-
-        sample = valid_series.astype(str).head(200)
-        all_entities = []
-        matched_count = 0
-
-        for val in sample:
-            if pd.isna(val) or val == '':
-                continue
-            try:
-                result = analyzer.analyze(text=val, language='en')
-                if result:
-                    matched_count += 1
-                    for entity in result:
-                        all_entities.append({
-                            'text': val[:100],
-                            'entity_type': entity.entity_type,
-                            'confidence': entity.score,
-                            'start': entity.start,
-                            'end': entity.end,
-                        })
-            except Exception as e:
-                logger.debug(f"Presidio analysis failed for '{val[:50]}': {e}")
-
-        coverage = matched_count / len(sample) if len(sample) > 0 else 0.0
-        return all_entities[:100], round(coverage, 4)
-
     # ================================================================
-    # 保持兼容的公共方法
+    # 公共方法（保持兼容）
     # ================================================================
 
     @classmethod

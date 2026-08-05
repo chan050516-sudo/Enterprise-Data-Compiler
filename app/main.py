@@ -115,6 +115,9 @@ def main():
         # ============================================================
         # PHASE 1: Semantic Profiling (IR-0)
         # ============================================================
+
+        SemanticProfiler.preload_all_detectors()
+        
         logger.info("📋 PHASE 1: Semantic Profiling (IR-0)")
         source_schema = SchemaInspector.from_dataframe(source_df)
         profiles = SemanticProfiler.generate_column_profiles(
