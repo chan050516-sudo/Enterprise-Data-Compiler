@@ -14,6 +14,16 @@ except ImportError:
     HAS_PANDAS_TYPE_DETECTOR = False
     TypeDetectionPipeline = None
 
+try:
+    from sentence_transformers import SentenceTransformer
+    HAS_SENTENCE_TRANSFORMER = True
+    # 使用轻量级模型，384维
+    _embedding_model = None
+except ImportError:
+    HAS_SENTENCE_TRANSFORMER = False
+    SentenceTransformer = None
+    _embedding_model = None
+
 HAS_DUCKLING = False
 HAS_PRESIDIO = False
 
@@ -41,6 +51,32 @@ class SemanticProfiler:
     _type_detector = None
     _duckling = None
     _presidio = None
+    _embedding_model = None
+
+    @classmethod
+    def _get_embedding_model(cls):
+        """懒加载 Sentence Transformer 模型"""
+        if cls._embedding_model is None and HAS_SENTENCE_TRANSFORMER:
+            try:
+                cls._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("Sentence Transformer model loaded: all-MiniLM-L6-v2")
+            except Exception as e:
+                logger.warning(f"Failed to load Sentence Transformer: {e}")
+                cls._embedding_model = None
+        return cls._embedding_model
+
+    @classmethod
+    def _generate_name_embedding(cls, column_name: str) -> Optional[List[float]]:
+        """生成列名的语义向量"""
+        model = cls._get_embedding_model()
+        if model is None:
+            return None
+        try:
+            embedding = model.encode(column_name, normalize_embeddings=True)
+            return embedding.tolist()
+        except Exception as e:
+            logger.debug(f"Failed to generate embedding for '{column_name}': {e}")
+            return None
 
     @classmethod
     def _get_type_detector(cls):
@@ -223,6 +259,10 @@ class SemanticProfiler:
                 storage_type, logical_type, pattern_fingerprints, col, stats
             )
 
+            # ----- 14. 新增：生成列名 Embedding -----
+            name_embedding = cls._generate_name_embedding(col)
+
+
             # ----- 构建 Profile -----
             profile = ColumnProfileIR(
                 column_name=col,
@@ -277,6 +317,8 @@ class SemanticProfiler:
                 detected_format=detected_format,
                 duckling_summary=duckling_summary,
                 presidio_summary=presidio_summary,
+                # ===== 新增：列名 Embedding =====
+                name_embedding=name_embedding,
                 # 内部缓存
                 _value_set=set(valid_series.astype(str).values) if valid_count > 0 and valid_count < 5000 else None
             )

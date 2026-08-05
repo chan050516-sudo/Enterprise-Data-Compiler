@@ -16,6 +16,15 @@ except ImportError:
     HAS_TEXTDISTANCE = False
     import difflib
 
+try:
+    from datasketch import MinHashLSH, MinHash
+    HAS_DATASKETCH = True
+except ImportError:
+    HAS_DATASKETCH = False
+    MinHashLSH = None
+    MinHash = None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +54,8 @@ class NodeBuilder:
                 avg_length=profile.avg_length,
                 pattern_signature=profile.pattern or "unknown",
                 distribution_profile=profile.percentiles or {},
-                candidate_types=profile.candidate_types or []
+                candidate_types=profile.candidate_types or [],
+                name_embedding=profile.name_embedding,
             )
             col_semantic_vector_dict = col_semantic_vector.model_dump()
         except Exception as e:
@@ -198,7 +208,8 @@ class CandidateGenerator:
     ) -> List[Tuple[str, str]]:
         col_names = [p.column_name for p in profiles]
         candidate_pairs = []
-        
+
+        # ===== 第一路：行为分块 Blocking =====
         if enable_blocking and len(profiles) > CandidateGenerator.BLOCKING_THRESHOLD:
             block_groups = CandidateGenerator._group_by_behavior_buckets(nodes)
             
@@ -241,8 +252,50 @@ class CandidateGenerator:
             for i in range(n):
                 for j in range(i + 1, n):
                     candidate_pairs.append((col_names[i], col_names[j]))
+
+        # ===== 第二路：LSH 近似搜索（补充召回） =====
+        if HAS_DATASKETCH and len(profiles) > 20:
+            lsh_candidates = CandidateGenerator.generate_lsh_candidates(profiles)
+            # 合并两路候选（去重）
+            all_pairs = set(candidate_pairs) | set(lsh_candidates)
+            candidate_pairs = list(all_pairs)
+            logger.info(f"  - LSH contributed {len(lsh_candidates)} additional pairs, total: {len(candidate_pairs)}")
         
         return candidate_pairs
+
+    @staticmethod
+    def generate_lsh_candidates(
+        profiles: List[ColumnProfileIR], 
+        threshold: float = 0.5, # 可调
+        num_perm: int = 128
+    ) -> List[Tuple[str, str]]:
+        """使用 MinHash LSH 生成候选对"""
+        if not HAS_DATASKETCH:
+            return []
+        
+        # 构建 LSH 索引
+        lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
+        minhashes = {}
+        
+        for p in profiles:
+            # 用样本值构建 MinHash
+            m = MinHash(num_perm=num_perm)
+            for val in p.samples[:20]:  # 限制样本数
+                m.update(str(val).encode('utf-8'))
+            minhashes[p.column_name] = m
+            lsh.insert(p.column_name, m)
+        
+        # 查询候选对
+        candidates = set()
+        for p in profiles:
+            result = lsh.query(minhashes[p.column_name])
+            for r in result:
+                if r != p.column_name:
+                    # 保证有序，避免重复
+                    key = tuple(sorted((p.column_name, r)))
+                    candidates.add(key)
+        
+        return list(candidates)
     
     @staticmethod
     def _group_by_behavior_buckets(nodes: List[GraphNode]) -> Dict[str, List[str]]:
@@ -274,6 +327,10 @@ class EvidenceCalculator:
         name_sim = EvidenceCalculator._compute_name_similarity(col_a, col_b)
         
         # 值 Jaccard + 包含依赖
+        
+        # ===== 新增：列名语义相似度（Embedding） =====
+        embedding_sim = EvidenceCalculator._compute_embedding_similarity(profile_a, profile_b)
+
         jaccard, containment_a_to_b, containment_b_to_a, cardinality = \
             EvidenceCalculator._compute_value_overlap(col_value_sets, col_a, col_b)
         
@@ -292,9 +349,6 @@ class EvidenceCalculator:
         # 共现得分
         co_occurrence = EvidenceCalculator._compute_co_occurrence(profile_a, profile_b)
         
-        # 格式相似度
-        format_sim = EvidenceCalculator._compute_format_similarity(profile_a, profile_b)
-        
         # 聚类重叠
         cluster_overlap = EvidenceCalculator._compute_cluster_overlap(profile_a, profile_b)
         
@@ -304,14 +358,15 @@ class EvidenceCalculator:
         # 语义重叠
         semantic_overlap = EvidenceCalculator._compute_semantic_overlap(profile_a, profile_b)
         
-        # 模式匹配
-        pattern_match = EvidenceCalculator._compute_pattern_match(profile_a, profile_b)
+        # ===== 统计向量相似度 =====
+        stat_vector_sim = EvidenceCalculator._compute_statistical_vector_similarity(profile_a, profile_b)
         
-        # 结构签名匹配
-        structural_match = EvidenceCalculator._compute_structural_signature_match(profile_a, profile_b)
+        # ===== 合并形态学证据（取最大值，去相关） =====
+        morphology_sim = EvidenceCalculator._compute_morphology_similarity(profile_a, profile_b)
         
         return EvidenceDetail(
             name_similarity=round(name_sim, 4),
+            embedding_similarity=round(embedding_sim, 4),
             value_overlap=round(jaccard, 4),
             cardinality=cardinality,
             co_occurrence_score=round(co_occurrence, 4),
@@ -320,13 +375,12 @@ class EvidenceCalculator:
             null_pattern_similarity=round(null_pattern_sim, 4),
             distribution_similarity=round(dist_sim, 4),
             datatype_compatibility=round(storage_compat, 4),
-            minhash_similarity=None,
-            format_similarity=round(format_sim, 4),
             cluster_overlap=round(cluster_overlap, 4),
             logical_type_match=round(logical_match, 4),
             semantic_overlap=round(semantic_overlap, 4),
-            pattern_match=round(pattern_match, 4),
-            structural_signature_match=round(structural_match, 4),
+            statistical_vector_similarity=round(stat_vector_sim, 4),
+            morphology_similarity=round(morphology_sim, 4),
+            minhash_similarity=None,
         )
     
     # ---- 私有辅助方法 ----
@@ -336,6 +390,57 @@ class EvidenceCalculator:
         if HAS_TEXTDISTANCE:
             return textdistance.jaro_winkler(col_a.lower(), col_b.lower())
         return difflib.SequenceMatcher(None, col_a.lower(), col_b.lower()).ratio()
+
+    @staticmethod
+    def _compute_embedding_similarity(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        """计算列名语义向量相似度（余弦相似度）"""
+        emb_a = profile_a.name_embedding
+        emb_b = profile_b.name_embedding
+        if emb_a is None or emb_b is None:
+            return 0.0
+        if len(emb_a) != len(emb_b):
+            return 0.0
+        try:
+            import numpy as np
+            v1 = np.array(emb_a)
+            v2 = np.array(emb_b)
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            return float(np.dot(v1, v2) / (norm1 * norm2))
+        except Exception:
+            return 0.0
+    
+    @staticmethod
+    def _compute_morphology_similarity(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        """
+        合并形态学证据（去相关）：
+        取 pattern_match, format_similarity, structural_signature_match 的最大值
+        """
+        # 1. pattern_match（基于 pattern_fingerprints）
+        pattern_match = 0.0
+        for pa in profile_a.pattern_fingerprints:
+            for pb in profile_b.pattern_fingerprints:
+                if pa.pattern_name == pb.pattern_name and pa.coverage > 0.7 and pb.coverage > 0.7:
+                    score = pa.confidence * pb.confidence
+                    if score > pattern_match:
+                        pattern_match = score
+        
+        # 2. format_similarity（基于 structural_signature_detail）
+        sig_a = profile_a.structural_signature_detail
+        sig_b = profile_b.structural_signature_detail
+        format_sim = 0.0
+        if sig_a and sig_b and sig_a.get('signature') == sig_b.get('signature'):
+            format_sim = 1.0
+        
+        # 3. structural_signature_match（精确匹配）
+        structural_match = 0.0
+        if sig_a and sig_b and sig_a.get('signature') == sig_b.get('signature'):
+            structural_match = 1.0
+        
+        # 取最大值
+        return max(pattern_match, format_sim, structural_match)
     
     @staticmethod
     def _compute_value_overlap(
@@ -513,6 +618,7 @@ class EvidenceCalculator:
         try:
             # 构建两个 ColumnSemanticVector 对象（只需填充必要字段）
             vec_a = ColumnSemanticVector(
+                name_embedding=profile_a.name_embedding,
                 datatype=profile_a.storage_type,
                 cardinality=profile_a.distinct_count,
                 uniqueness=profile_a.unique_ratio,
@@ -524,6 +630,7 @@ class EvidenceCalculator:
                 candidate_types=profile_a.candidate_types or []
             )
             vec_b = ColumnSemanticVector(
+                name_embedding=profile_b.name_embedding,
                 datatype=profile_b.storage_type,
                 cardinality=profile_b.distinct_count,
                 uniqueness=profile_b.unique_ratio,
@@ -548,16 +655,16 @@ class WeightedFusionEngine:
         "fd_confidence": 0.18,
         "inclusion": 0.14,
         "value_jaccard": 0.08,
-        "name_similarity": 0.05,
+        "name_similarity": 0.04,
+        "embedding_similarity": 0.08,
         "datatype_compatibility": 0.04,
         "distribution": 0.04,
         "null_pattern": 0.04,
-        "format_similarity": 0.08,
         "cluster_overlap": 0.08,
         "logical_type_match": 0.10,
         "semantic_overlap": 0.08,
-        "pattern_match": 0.05,
         "statistical_vector_similarity": 0.04,
+        "morphology_similarity": 0.06,
     }
     
     @classmethod
@@ -571,16 +678,15 @@ class WeightedFusionEngine:
             cls.WEIGHTS["inclusion"] * (evidence.inclusion_degree or 0.0) +
             cls.WEIGHTS["value_jaccard"] * (evidence.value_overlap or 0.0) +
             cls.WEIGHTS["name_similarity"] * (evidence.name_similarity or 0.0) +
+            cls.WEIGHTS["embedding_similarity"] * (evidence.embedding_similarity or 0.0) +
             cls.WEIGHTS["datatype_compatibility"] * (evidence.datatype_compatibility or 0.0) +
             cls.WEIGHTS["distribution"] * (evidence.distribution_similarity or 0.0) +
             cls.WEIGHTS["null_pattern"] * (evidence.null_pattern_similarity or 0.0) +
-            cls.WEIGHTS["format_similarity"] * (evidence.format_similarity or 0.0) +
             cls.WEIGHTS["cluster_overlap"] * (evidence.cluster_overlap or 0.0) +
             cls.WEIGHTS["logical_type_match"] * (evidence.logical_type_match or 0.0) +
             cls.WEIGHTS["semantic_overlap"] * (evidence.semantic_overlap or 0.0) +
-            cls.WEIGHTS["pattern_match"] * (evidence.pattern_match or 0.0) +
-            cls.WEIGHTS["structural_signature_match"] * (evidence.structural_signature_match or 0.0) +
-            cls.WEIGHTS["statistical_vector_similarity"] * (evidence.statistical_vector_similarity or 0.0)
+            cls.WEIGHTS["statistical_vector_similarity"] * (evidence.statistical_vector_similarity or 0.0) +
+            cls.WEIGHTS["morphology_similarity"] * (evidence.morphology_similarity or 0.0)
         )
         return round(min(1.0, weighted_score), 4)
 
@@ -594,14 +700,16 @@ class EdgeTypeDecider:
         weight: float,
         fd_threshold: float = 0.8,
         inclusion_threshold: float = 0.9
-    ) -> List[GraphEdge]:
+    ) -> List[EdgeType]:
         """根据证据和权重决定边类型"""
         candidate_edges = []
         containment_a_to_b = evidence.inclusion_degree or 0.0
         jaccard = evidence.value_overlap or 0.0
         name_sim = evidence.name_similarity or 0.0
+        embedding_sim = evidence.embedding_similarity or 0.0
         logical_match = evidence.logical_type_match or 0.0
         semantic_overlap = evidence.semantic_overlap or 0.0
+        morphology_sim = evidence.morphology_similarity or 0.0
         
         if evidence.partition_similarity and evidence.partition_similarity > fd_threshold:
             candidate_edges.append(EdgeType.FUNCTIONAL_DEPENDENCY)
@@ -610,7 +718,8 @@ class EdgeTypeDecider:
             candidate_edges.append(EdgeType.POSSIBLE_FK)
         
         if not candidate_edges:
-            if jaccard > 0.5 or name_sim > 0.7 or logical_match > 0.5 or semantic_overlap > 0.5:
+            if (jaccard > 0.5 or name_sim > 0.7 or logical_match > 0.5 or 
+                semantic_overlap > 0.5 or embedding_sim > 0.7 or morphology_sim > 0.7):
                 candidate_edges.append(EdgeType.SIMILAR_TO)
             elif weight > 0.4:
                 candidate_edges.append(EdgeType.CO_OCCURS_WITH)

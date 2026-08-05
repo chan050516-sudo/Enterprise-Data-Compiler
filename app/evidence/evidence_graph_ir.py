@@ -29,14 +29,16 @@ class EvidenceDetail(BaseModel):
     datatype_compatibility: Optional[float] = None       # 数据类型兼容性 (numeric~numeric=1, string~string=1)
     co_occurrence_score: Optional[float] = None          # 同表/同数据集共现强度
 
-    # ---------- 新增：形态学证据 ----------
-    format_similarity: Optional[float] = Field(
-        default=None,
-        description="格式模板相似度（如 DDD-DD vs DDD-DD）"
-    )
+    # ---------- 聚类证据 ----------
     cluster_overlap: Optional[float] = Field(
         default=None,
         description="枚举簇重叠度"
+    )
+
+    # ========== 合并后的 Morphology 证据（替代原来的 pattern_match + format_similarity + structural_signature_match） ==========
+    morphology_similarity: Optional[float] = Field(
+        default=None,
+        description="形态相似度（取 pattern_match / format_similarity / structural_signature_match 的最大值）"
     )
 
     # ========== 新增：Phase 1 高级指纹匹配 ==========
@@ -47,14 +49,6 @@ class EvidenceDetail(BaseModel):
     semantic_overlap: Optional[float] = Field(
         default=None,
         description="语义候选重叠度 (0-1)"
-    )
-    pattern_match: Optional[float] = Field(
-        default=None,
-        description="模式指纹匹配度 (0-1)"
-    )
-    structural_signature_match: Optional[float] = Field(
-        default=None,
-        description="结构签名完全匹配 (0/1)"
     )
 
     # ========== 新增：统计向量相似度（基于 ColumnSemanticVector） ==========

@@ -159,6 +159,14 @@ class ColumnProfileIR(BaseModel):
     detection_confidence: Optional[float] = None
     detected_format: Optional[str] = None
 
+    # =========================================================================
+    # Phase 2 升级: 列名 Embedding（由 Phase 1 生成）
+    # =========================================================================
+    name_embedding: Optional[List[float]] = Field(
+        default=None,
+        description="列名的语义向量（由 Sentence Transformer 生成）"
+    )
+
     # ---------- 内部缓存 ----------
     _value_set: Optional[Set[Any]] = None
 

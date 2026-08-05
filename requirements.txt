@@ -1,4 +1,5 @@
 Babel==2.18.0
+datasketch==2.0.0
 email_validator==2.3.0
 Faker==40.36.0
 fb_duckling==1.0
@@ -21,3 +22,4 @@ scipy==1.18.0
 sentence_transformers==5.6.1
 SQLAlchemy==2.0.51
 sqlparse==0.5.5
+textdistance==4.6.3
