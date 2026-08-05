@@ -14,16 +14,6 @@ except ImportError:
     HAS_PANDAS_TYPE_DETECTOR = False
     TypeDetectionPipeline = None
 
-try:
-    from sentence_transformers import SentenceTransformer
-    HAS_SENTENCE_TRANSFORMER = True
-    # 使用轻量级模型，384维
-    _embedding_model = None
-except ImportError:
-    HAS_SENTENCE_TRANSFORMER = False
-    SentenceTransformer = None
-    _embedding_model = None
-
 HAS_DUCKLING = False
 HAS_PRESIDIO = False
 
@@ -55,14 +45,18 @@ class SemanticProfiler:
 
     @classmethod
     def _get_embedding_model(cls):
-        """懒加载 Sentence Transformer 模型"""
-        if cls._embedding_model is None and HAS_SENTENCE_TRANSFORMER:
+        """懒加载 Sentence Transformer 模型（仅在真正需要时加载）"""
+        if cls._embedding_model is None:
             try:
+                from sentence_transformers import SentenceTransformer
                 cls._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
                 logger.info("Sentence Transformer model loaded: all-MiniLM-L6-v2")
-            except Exception as e:
-                logger.warning(f"Failed to load Sentence Transformer: {e}")
+            except ImportError:
                 cls._embedding_model = None
+                logger.warning("sentence-transformers not installed")
+            except Exception as e:
+                cls._embedding_model = None
+                logger.warning(f"Failed to load Sentence Transformer: {e}")
         return cls._embedding_model
 
     @classmethod

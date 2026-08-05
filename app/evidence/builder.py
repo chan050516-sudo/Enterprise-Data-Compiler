@@ -108,6 +108,8 @@ class NodeBuilder:
     
     @staticmethod
     def _compute_monotonicity(series: pd.Series) -> float:
+        if not pd.api.types.is_numeric_dtype(series):
+            return 0.0  # 非数值列返回 0
         s = series.dropna()
         if len(s) < 3:
             return 0.5
@@ -173,7 +175,11 @@ class NodeBuilder:
     @staticmethod
     def _detect_id_pattern(column_name: str) -> bool:
         col_lower = column_name.lower()
-        return any(kw in col_lower for kw in ['_id', 'id_', '_code', 'code_', '_no', 'no_'])
+        if col_lower == 'id':
+            return True
+        if any(kw in col_lower for kw in ['_id', 'id_', '_code', 'code_', '_no', 'no_']):
+            return True
+        return False
     
     @staticmethod
     def compute_anchor_score(node: GraphNode, profile: ColumnProfileIR) -> float:
@@ -189,6 +195,8 @@ class NodeBuilder:
             pattern_score = max(pattern_score, 0.9)
         
         entropy = node.properties.get("entropy", 0)
+        if not isinstance(entropy, (int, float)):
+            entropy = 0.0
         diversity = min(1.0, entropy / 10.0)
         
         return round(0.4 * pk_score + 0.3 * uniqueness + 0.2 * pattern_score + 0.1 * diversity, 4)
@@ -305,9 +313,13 @@ class CandidateGenerator:
             if not fp:
                 buckets[f"single_{node.column_name}"].append(node.column_name)
                 continue
-            change_bucket = int(fp.get("change_rate", 0) * 10)
-            entropy_bucket = int(fp.get("entropy", 0) / 2)
-            cardinality_bucket = int(fp.get("cardinality_ratio", 0) * 5)
+            # 防御性转换
+            change_rate = float(fp.get("change_rate", 0))
+            entropy = float(fp.get("entropy", 0))
+            cardinality_ratio = float(fp.get("cardinality_ratio", 0))
+            change_bucket = int(change_rate * 10)
+            entropy_bucket = int(entropy / 2)
+            cardinality_bucket = int(cardinality_ratio * 5)
             bucket_key = f"b{change_bucket}_e{entropy_bucket}_c{cardinality_bucket}"
             buckets[bucket_key].append(node.column_name)
         return {k: v for k, v in buckets.items() if len(v) > 1}
