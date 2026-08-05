@@ -1,6 +1,6 @@
 import logging
 from typing import List, Dict, Set, Optional
-from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
+from app.evidence.evidence_graph_ir import EvidenceGraph, EdgeType
 from app.schema.hypothesis_ir import HypothesisPool, HypothesisType, Hypothesis
 from app.schema.constraint import ConstraintViolation, ConstraintType
 

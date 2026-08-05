@@ -11,7 +11,7 @@ from app.config.settings import settings
 from app.normalizer.technical_normalizer import TechnicalNormalizer
 from app.connectors.csv_connector import CSVConnector
 from app.knowledge.knowledge_base import KnowledgeBase
-from app.schema.semantic_profiler import SemanticProfiler
+from app.profiler.semantic_profiler import SemanticProfiler
 from app.ontology.schema_introspection import SchemaInspector
 from app.llm.llm_client import GeminiClient
 from app.llm.mapping_planner import MappingPlanner
@@ -117,7 +117,7 @@ def main():
         # ============================================================
 
         SemanticProfiler.preload_all_detectors()
-        
+
         logger.info("📋 PHASE 1: Semantic Profiling (IR-0)")
         source_schema = SchemaInspector.from_dataframe(source_df)
         profiles = SemanticProfiler.generate_column_profiles(

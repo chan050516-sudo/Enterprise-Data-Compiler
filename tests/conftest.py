@@ -1,5 +1,5 @@
 import pytest
-from app.schema.semantic_profiler import SemanticProfiler
+from app.profiler.semantic_profiler import SemanticProfiler
 
 @pytest.fixture(autouse=True)
 def disable_preload_for_tests():

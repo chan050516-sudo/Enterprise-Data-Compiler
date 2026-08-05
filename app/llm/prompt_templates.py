@@ -1,6 +1,6 @@
 import json
 from typing import Dict, Any, Optional, List
-from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
+from app.evidence.evidence_graph_ir import EvidenceGraph, EdgeType
 
 # ==========================================
 # 新的统一 Mapping Planner Prompt (替代旧版)

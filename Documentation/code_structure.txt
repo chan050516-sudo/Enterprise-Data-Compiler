@@ -59,6 +59,7 @@ enterprise-data-compiler/
 │   │   └── semnatic_interpreter.py
 │
 │   ├── normalizer/
+│   │   ├── detectors.py 
 │   │   └── technical_normalizer.py
 │
 │   ├── ontology/
@@ -120,3 +121,67 @@ enterprise-data-compiler/
 ├── tests/ 
 │
 └── demo/
+
+
+
+
+Proposed:
+
+app/
+├── phase0_connectors/
+│   ├── base.py
+│   └── csv_connector.py
+├── phase0_5_normalizer/
+│   ├── detectors.py
+│   ├── technical_normalizer.py
+│   └── normalization_model.py      # 专属 schema
+├── phase1_profiler/
+│   ├── semantic_profiler.py
+│   ├── profile_ir.py               # 专属 schema
+│   └── tests/                      # 单元测试就近放置
+├── phase2_evidence/
+│   ├── builder.py
+│   ├── evidence_graph_ir.py        # 专属 schema
+│   └── column_embedding_vector.py
+├── phase3_reasoning/
+│   ├── engine.py
+│   ├── constraint_engine.py
+│   ├── evidence_fusion.py
+│   ├── likelihood.py
+│   └── hypothesis_ir.py            # 专属 schema
+├── phase4_mapping/
+│   ├── llm_client.py
+│   ├── mapping_planner.py
+│   ├── prompt_templates.py
+│   └── ir_model.py                 # 专属 schema
+├── phase5_governance/
+│   ├── governor.py
+│   ├── spec_repo.py
+│   ├── ir_validator.py
+│   └── spec_model.py               # 专属 schema
+├── phase6_execution/
+│   ├── compiler.py
+│   ├── trust_evaluator.py
+│   ├── report.py
+│   └── ...
+├── phase7_reconciliation/
+│   ├── reconciliation.py
+│   ├── saga_manager.py
+│   ├── inverse_compiler.py
+│   └── state_machine.py
+├── phase8_output/
+│   ├── sqlite_writer.py
+│   └── exporter.py
+├── phase9_orchestration/
+│   └── wave_orchestrator.py
+│   └── wave_model.py
+├── shared/
+│   ├── schema/                     # 真正共享的模型
+│   │   ├── evidence.py
+│   │   └── constraint.py
+│   ├── knowledge/
+│   │   ├── knowledge_base.py
+│   │   └── mapping_registry.py
+│   └── config/
+│       └── settings.py
+└── main.py

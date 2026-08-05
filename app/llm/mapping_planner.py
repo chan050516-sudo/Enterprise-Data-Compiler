@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from app.llm.llm_client import GeminiClient
 from app.llm.prompt_templates import MAPPING_PLANNER_SYSTEM, build_mapping_planner_prompt
 from app.schema.ir_model import MappingSpec, AdvancedTransformationIR, MappingMetadata
-from app.schema.evidence_graph_ir import EvidenceGraph
+from app.evidence.evidence_graph_ir import EvidenceGraph
 
 logger = logging.getLogger(__name__)
 

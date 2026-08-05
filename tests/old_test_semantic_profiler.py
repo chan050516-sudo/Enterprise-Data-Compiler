@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 import math
 from unittest.mock import patch, MagicMock
-from app.schema.profile_ir import ColumnProfileIR
-from app.schema.semantic_profiler import SemanticProfiler
+from app.profiler.profile_ir import ColumnProfileIR
+from app.profiler.semantic_profiler import SemanticProfiler
 
 # 标记是否需要 pandas-type-detector
 try:

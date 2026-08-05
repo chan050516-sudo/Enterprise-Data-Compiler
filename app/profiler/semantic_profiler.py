@@ -5,7 +5,7 @@ import logging
 import re
 from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple, Set
-from app.schema.profile_ir import ColumnProfileIR, PatternFingerprint, SemanticCandidate, EntitySummary
+from app.profiler.profile_ir import ColumnProfileIR, PatternFingerprint, SemanticCandidate, EntitySummary
 
 try:
     from pandas_type_detector import TypeDetectionPipeline

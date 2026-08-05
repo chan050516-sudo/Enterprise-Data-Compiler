@@ -2,7 +2,7 @@ import logging
 import math
 import uuid
 from typing import List, Dict, Set, Optional, Any
-from app.schema.evidence_graph_ir import EvidenceGraph, EdgeType
+from app.evidence.evidence_graph_ir import EvidenceGraph, EdgeType
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope
 from app.schema.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisStatus, HypothesisType
 from app.schema.resolution import ResolutionPlan, ResolutionLoop, ResolutionStatus, ResolutionOperatorType

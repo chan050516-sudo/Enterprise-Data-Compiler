@@ -8,7 +8,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import numpy as np
-from app.schema.profile_ir import ColumnProfileIR
+from app.profiler.profile_ir import ColumnProfileIR
 
 
 class ColumnSemanticVector(BaseModel):

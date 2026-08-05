@@ -5,10 +5,10 @@ from typing import Dict, Any, Tuple, Optional
 from datetime import datetime, timezone
 
 from app.control.governor import SpecGovernor
-from app.schema.semantic_profiler import SemanticProfiler
-from app.schema.evidence_graph_ir import EvidenceGraph
+from app.profiler.semantic_profiler import SemanticProfiler
+from app.evidence.evidence_graph_ir import EvidenceGraph
 from app.evidence.builder import EvidenceGraphBuilder
-from app.schema.semantic_profiler import SemanticProfiler
+from app.profiler.semantic_profiler import SemanticProfiler
 from app.llm.mapping_planner import MappingPlanner
 from app.knowledge.knowledge_base import KnowledgeBase
 from app.harness.ir_validator import IRValidator

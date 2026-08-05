@@ -6,9 +6,9 @@ import re
 import numpy as np
 from typing import List, Set, Dict, Any, Optional, Tuple
 from collections import defaultdict
-from app.schema.profile_ir import ColumnProfileIR
-from app.schema.evidence_graph_ir import EvidenceGraph, GraphNode, GraphEdge, EdgeType, EvidenceDetail
-from app.schema.column_embedding_vector import ColumnSemanticVector
+from app.profiler.profile_ir import ColumnProfileIR
+from app.evidence.evidence_graph_ir import EvidenceGraph, GraphNode, GraphEdge, EdgeType, EvidenceDetail
+from app.evidence.column_embedding_vector import ColumnSemanticVector
 
 logger = logging.getLogger(__name__)
 

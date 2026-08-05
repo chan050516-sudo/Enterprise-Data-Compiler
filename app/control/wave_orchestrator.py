@@ -4,7 +4,7 @@ import pandas as pd
 
 from app.ontology.schema_introspection import SchemaInspector
 from app.schema.wave_model import MigrationWave, WaveTask
-from app.schema.evidence_graph_ir import EvidenceGraph
+from app.evidence.evidence_graph_ir import EvidenceGraph
 from app.control.spec_repo import SpecRepository
 from app.ontology.business_schema import OntologyRegistryManager
 from app.execution.orchestrator import PipelineOrchestrator

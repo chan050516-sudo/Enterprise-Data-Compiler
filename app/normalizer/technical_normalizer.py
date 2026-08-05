@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Dict, Any, Optional, Tuple
 from app.config.settings import settings
-from app.schema.normalization_model import NormalizationReport, ColumnNormalizationReport
+from app.normalizer.normalization_model import NormalizationReport, ColumnNormalizationReport
 from app.normalizer.detectors import (
     PhoneDetector, EmailDetector, DateDetector,
     BooleanDetector, CurrencyDetector

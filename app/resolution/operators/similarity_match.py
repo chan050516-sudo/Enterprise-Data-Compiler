@@ -14,7 +14,7 @@ import numpy as np
 from app.resolution.base import BaseResolutionOperator
 from app.schema.ir_model import Evidence
 from app.schema.resolution import ResolutionPlan
-from app.schema.column_embedding_vector import ColumnSemanticVector  # ← 新增导入
+from app.evidence.column_embedding_vector import ColumnSemanticVector  # ← 新增导入
 
 logger = logging.getLogger(__name__)
 
