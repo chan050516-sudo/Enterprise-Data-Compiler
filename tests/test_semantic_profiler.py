@@ -13,9 +13,9 @@ except ImportError:
 
 @pytest.fixture(autouse=True)
 def mock_third_party():
-    with patch('app.schema.semantic_profiler.SemanticProfiler._run_pandas_type_detector', return_value=(None, None, None)):
-        with patch('app.schema.semantic_profiler.SemanticProfiler._extract_duckling_summary', return_value={}):
-            with patch('app.schema.semantic_profiler.SemanticProfiler._extract_presidio_summary', return_value={}):
+    with patch('app.profiler.semantic_profiler.SemanticProfiler._run_pandas_type_detector', return_value=(None, None, None)):
+        with patch('app.profiler.semantic_profiler.SemanticProfiler._extract_duckling_summary', return_value={}):
+            with patch('app.profiler.semantic_profiler.SemanticProfiler._extract_presidio_summary', return_value={}):
                 yield
 
 

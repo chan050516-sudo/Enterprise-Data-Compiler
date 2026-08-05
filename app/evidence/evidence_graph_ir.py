@@ -38,6 +38,30 @@ class EvidenceDetail(BaseModel):
         default=None,
         description="枚举簇重叠度"
     )
+
+    # ========== 新增：Phase 1 高级指纹匹配 ==========
+    logical_type_match: Optional[float] = Field(
+        default=None,
+        description="逻辑类型匹配 (0/1)"
+    )
+    semantic_overlap: Optional[float] = Field(
+        default=None,
+        description="语义候选重叠度 (0-1)"
+    )
+    pattern_match: Optional[float] = Field(
+        default=None,
+        description="模式指纹匹配度 (0-1)"
+    )
+    structural_signature_match: Optional[float] = Field(
+        default=None,
+        description="结构签名完全匹配 (0/1)"
+    )
+
+    # ========== 新增：统计向量相似度（基于 ColumnSemanticVector） ==========
+    statistical_vector_similarity: Optional[float] = Field(
+        default=None,
+        description="基于列统计指纹向量的相似度 (0-1)"
+    )
     
     # ---------- 未来扩展：Sketch 近似（占位） ----------
     minhash_similarity: Optional[float] = None           # MinHash 近似 Jaccard

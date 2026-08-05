@@ -1,5 +1,4 @@
 import pandas as pd
-import difflib
 import logging
 import math
 import re
@@ -10,459 +9,71 @@ from app.profiler.profile_ir import ColumnProfileIR
 from app.evidence.evidence_graph_ir import EvidenceGraph, GraphNode, GraphEdge, EdgeType, EvidenceDetail
 from app.evidence.column_embedding_vector import ColumnSemanticVector
 
+try:
+    import textdistance
+    HAS_TEXTDISTANCE = True
+except ImportError:
+    HAS_TEXTDISTANCE = False
+    import difflib
+
 logger = logging.getLogger(__name__)
 
 
-class EvidenceGraphBuilder:
-    """
-    Phase 2: Evidence Graph Constructor
-    基于 IR-0 (列画像) 和原始数据，生成 IR-1 (证据图)。
-    全部逻辑为确定性算法，不调用 LLM。
-
-    设计原则：
-    1. 本层只产出"证据"（Evidence），不产出"结论"（Conclusion）
-    2. 候选生成（Candidate Generation）与证据计算（Evidence Calculation）分离
-    3. 证据权重基于可靠性分级，避免误判信号主导
-    """
-
-    BLOCKING_THRESHOLD = 50
-
-    # 主键评分权重
-    PK_WEIGHTS = {
-        "unique_ratio": 0.35,
-        "null_ratio": 0.20,
-        "semantic": 0.25,
-        "datatype": 0.10,
-        "monotonicity": 0.10,   # 新增：单调性（区分 ID 与金额）
-    }
-
-    # 综合证据权重（用于边置信度融合）
-    # 注意：越可靠的证据权重越高，容易误导的证据权重较低
-    EVIDENCE_WEIGHTS = {
-        "fd_confidence": 0.25,       # 函数依赖，最可靠
-        "inclusion": 0.20,           # 包含依赖，FK 核心证据
-        "value_jaccard": 0.15,       # 值集合 Jaccard，属性匹配证据
-        "name_similarity": 0.08,     # 列名相似，辅助证据
-        "datatype": 0.04,            # 类型兼容，弱证据
-        "distribution": 0.04,        # 分布相似，易误判，权重低
-        "null_pattern": 0.04,        # 空值模式，易误判，权重低
-        "format_similarity": 0.10,
-        "cluster_overlap": 0.10,
-    }
-
-    @classmethod
-    def build(
-        cls,
-        profiles: List[ColumnProfileIR],
-        df: pd.DataFrame,
-        name_sim_threshold: float = 0.6,
-        overlap_threshold: float = 0.3,
-        partition_threshold: float = 0.8,
-        inclusion_threshold: float = 0.9,
-        max_sample_for_overlap: int = 5000,
-        use_sampling: bool = True,
-        enable_blocking: bool = True,
-        max_cross_block_pairs: int = 200
-    ) -> EvidenceGraph:
-        """
-        构建证据图。
-        :param profiles: IR-0 列画像列表
-        :param df: 原始 DataFrame（用于取值集合）
-        :param name_sim_threshold: 列名相似度阈值
-        :param overlap_threshold: 值重叠率阈值
-        :param partition_threshold: FD 置信度阈值，用于生成 FUNCTIONAL_DEPENDENCY 边
-        :param inclusion_threshold: 包含度阈值，用于生成 POSSIBLE_FK 边
-        :param max_sample_for_overlap: 值集合最大采样数
-        :param use_sampling: 是否使用随机采样
-        :param enable_blocking: 是否启用行为分块（Blocking）
-        :param max_cross_block_pairs: 跨块最大采样对数（保证 recall）
-        """
-        nodes = []
-        edges: List[GraphEdge] = []
-        col_name_map = {p.column_name: p for p in profiles}
-
-        # ============================================================
-        # Phase 1: 节点构建（含行为指纹）
-        # ============================================================
-
-        for p in profiles:
-            pk_score = cls._calculate_pk_score(p, df[p.column_name])
-            series = df[p.column_name].dropna()
-            entropy = cls._compute_entropy(series)
-
-            # 行为指纹（升级版：多维度，用于分块）
-            behavior_fingerprint = cls._compute_behavior_fingerprint(
-                df[p.column_name],
-                sample_rows=2000
+class NodeBuilder:
+    """构建证据图节点"""
+    
+    @staticmethod
+    def build_node(profile: ColumnProfileIR, df: pd.DataFrame) -> GraphNode:
+        series = df[profile.column_name].dropna()
+        entropy = EvidenceCalculator._compute_entropy(series)
+        pk_score = NodeBuilder._calculate_pk_score(profile, series)
+        
+        # 行为指纹
+        behavior_fingerprint = NodeBuilder._compute_behavior_fingerprint(
+            df[profile.column_name], sample_rows=2000
+        )
+        
+        # ColumnSemanticVector (保留)
+        col_semantic_vector_dict = None
+        try:
+            col_semantic_vector = ColumnSemanticVector(
+                datatype=profile.storage_type,
+                cardinality=profile.distinct_count,
+                uniqueness=profile.unique_ratio,
+                null_ratio=profile.null_ratio,
+                entropy=entropy or 0.0,
+                avg_length=profile.avg_length,
+                pattern_signature=profile.pattern or "unknown",
+                distribution_profile=profile.percentiles or {},
+                candidate_types=profile.candidate_types or []
             )
-
-            # ===== 新增：生成 Column Semantic Vector =====
-            # 用于列匹配，不依赖列名关键词
-            try:
-                # 获取样本值并生成 embedding（简化版）
-                samples = p.samples[:10] if p.samples else []
-                # 如果有 embedding 引擎，可以生成 name_embedding 和 value_embedding
-                # 这里我们先构建基础向量，不依赖外部 embedding 模型
-                col_semantic_vector = ColumnSemanticVector(
-                    datatype=p.data_type,
-                    cardinality=p.distinct_count,
-                    uniqueness=p.unique_ratio,
-                    null_ratio=p.null_ratio,
-                    entropy=entropy or 0.0,
-                    avg_length=p.avg_length,
-                    pattern_signature=p.pattern or "unknown",
-                    distribution_profile=p.percentiles or {},
-                    candidate_types=p.candidate_types or []
-                    # name_embedding 和 value_embedding_centroid 可在后续阶段补充
-                )
-                col_semantic_vector_dict = col_semantic_vector.model_dump()
-            except Exception as e:
-                logger.warning(f"Failed to generate ColumnSemanticVector for {p.column_name}: {e}")
-                col_semantic_vector_dict = None
-
-            node = GraphNode(
-                column_name=p.column_name,
-                properties={
-                    **p.dict(),
-                    "pk_score": pk_score,
-                    "entropy": entropy,
-                    "behavior_fingerprint": behavior_fingerprint,
-                    "dataset_name": p.dataset_name,
-                    "table_name": p.table_name,
-                    "has_id_pattern": cls._detect_id_pattern(p.column_name),
-                    "column_semantic_vector": col_semantic_vector_dict,
-                }
-            )
-            nodes.append(node)
-
-        # ============================================================
-        # Phase 2: 准备值集合（随机采样）
-        # ============================================================
-
-        col_value_sets: Dict[str, Set[str]] = {}
-        for profile in profiles:
-            if profile._value_set is not None:
-                col_value_sets[profile.column_name] = profile._value_set
-            else:
-                series_raw = df[profile.column_name].dropna().astype(str)
-                if use_sampling and len(series_raw) > max_sample_for_overlap:
-                    sampled_values = set(series_raw.sample(
-                        n=max_sample_for_overlap,
-                        random_state=42
-                    ).values)
-                else:
-                    sampled_values = set(series_raw.values)
-                col_value_sets[profile.column_name] = sampled_values
-
-        # ============================================================
-        # Phase 3: Candidate Generation（候选生成）
-        # 独立阶段：行为分块 + 锚点跨块采样
-        # ============================================================
-
-        candidate_pairs: List[Tuple[str, str]] = []
-
-        if enable_blocking and len(profiles) > cls.BLOCKING_THRESHOLD:
-            logger.info("Phase 3a: Candidate Generation via Behavior Blocking...")
-            # 3.1 行为分块（宽松分桶，而非精确 Key）
-            block_groups = cls._group_by_behavior_buckets(nodes)
-
-            # 3.2 同块内全部比较
-            for block_cols in block_groups.values():
-                if len(block_cols) > 1:
-                    for i in range(len(block_cols)):
-                        for j in range(i + 1, len(block_cols)):
-                            candidate_pairs.append((block_cols[i], block_cols[j]))
-
-            logger.info(f"  - Intra-block pairs: {len(candidate_pairs)}")
-
-            # 3.3 跨块采样（锚点策略：高 PK Score 列作为锚点，与其他所有列比较）
-            # 防止真正相关但行为不同的列被漏掉（如源表和目标表顺序不同）
-            # 取 PK Score 最高的 Top K 列作为锚点
-            anchor_cols = []
-            sorted_nodes = sorted(
-                nodes,
-                key=lambda x: cls._compute_anchor_score(x, col_name_map[x.column_name]),
-                reverse=True
-            )
-            for node in sorted_nodes:
-                if len(anchor_cols) >= max(5, int(len(nodes) * 0.05)):  # 至少 5 个，或 5%
-                    break
-                anchor_cols.append(node.column_name)
-
-            cross_block_count = 0
-            for anchor in anchor_cols:
-                for col in col_name_map.keys():
-                    if anchor == col:
-                        continue
-                    # 如果已经在同块内比较过，跳过
-                    if (anchor, col) in candidate_pairs or (col, anchor) in candidate_pairs:
-                        continue
-                    candidate_pairs.append((anchor, col))
-                    cross_block_count += 1
-                    if cross_block_count >= max_cross_block_pairs:
-                        break
-                if cross_block_count >= max_cross_block_pairs:
-                    break
-
-            logger.info(f"  - Cross-block anchor pairs: {cross_block_count}")
-            logger.info(f"  - Total candidate pairs: {len(candidate_pairs)}")
-
-            # 去重候选对
-            candidate_pairs = list(set([tuple(sorted(p)) for p in candidate_pairs]))
-
-        else:
-            # 降级：全量 O(n²)
-            col_names = list(col_name_map.keys())
-            n = len(col_names)
-            for i in range(n):
-                for j in range(i + 1, n):
-                    candidate_pairs.append((col_names[i], col_names[j]))
-            logger.info(f"Full O(n²) mode: {len(candidate_pairs)} pairs")
-
-        # ============================================================
-        # Phase 4: Evidence Calculation（证据计算）
-        # 仅对候选对计算多维证据
-        # ============================================================
-
-        logger.info(f"Phase 4: Calculating evidence for {len(candidate_pairs)} pairs...")
-
-        for col_a, col_b in candidate_pairs:
-            profile_a = col_name_map[col_a]
-            profile_b = col_name_map[col_b]
-
-            # ---- 4.1 列名相似度 ----
-            name_sim = difflib.SequenceMatcher(
-                None, col_a.lower(), col_b.lower()
-            ).ratio()
-
-            # ---- 4.2 值 Jaccard + 包含依赖 ----
-            set_a = col_value_sets.get(col_a, set())
-            set_b = col_value_sets.get(col_b, set())
-            jaccard = 0.0
-            containment_a_to_b = 0.0
-            containment_b_to_a = 0.0
-            cardinality = None
-
-            if set_a and set_b:
-                inter = len(set_a & set_b)
-                union = len(set_a | set_b)
-                jaccard = inter / union if union > 0 else 0.0
-                containment_a_to_b = inter / len(set_a) if len(set_a) > 0 else 0.0
-                containment_b_to_a = inter / len(set_b) if len(set_b) > 0 else 0.0
-
-                if inter > 0:
-                    if len(set_a) > len(set_b) and inter == len(set_b):
-                        cardinality = "many_to_one"
-                    elif len(set_b) > len(set_a) and inter == len(set_a):
-                        cardinality = "one_to_many"
-                    elif len(set_a) == len(set_b) and inter == len(set_a):
-                        cardinality = "one_to_one"
-
-            # ---- 4.3 FD Confidence ----
-            fd_conf = cls._compute_fd_confidence(df[col_a], df[col_b])
-
-            # ---- 4.4 空值模式对齐（弱） ----
-            null_pattern_sim = cls._compute_null_pattern_similarity(
-                df[col_a], df[col_b]
-            )
-
-            # ---- 4.5 分布相似度（弱） ----
-            dist_sim = cls._compute_distribution_similarity(
-                df[col_a], df[col_b]
-            )
-
-            # ---- 4.6 数据类型兼容性（弱） ----
-            datatype_compat = cls._compute_datatype_compatibility(
-                profile_a, profile_b
-            )
-
-            # ---- 4.7 共现得分（动态：同表 > 同数据集 > 不同源） ----
-            co_occurrence_score = 1.0
-            if profile_a.table_name and profile_b.table_name:
-                if profile_a.table_name == profile_b.table_name:
-                    co_occurrence_score = 0.6   # 同表，弱关联
-                elif profile_a.dataset_name == profile_b.dataset_name:
-                    co_occurrence_score = 0.3   # 同数据集，更弱
-                else:
-                    co_occurrence_score = 0.1   # 不同源，几乎无意义
-            else:
-                co_occurrence_score = 0.5 if profile_a.dataset_name == profile_b.dataset_name else 0.2
-
-            # [新增] 4.8 形态学相似度 (Format Similarity)
-            format_sim = cls._compute_format_similarity(df[col_a], df[col_b])
-
-            # [新增] 4.9 聚类重叠度 (Cluster Overlap)
-            cluster_overlap = 0.0
-            clusters_a = profile_a.value_fingerprint_clusters or {}
-            clusters_b = profile_b.value_fingerprint_clusters or {}
-            if clusters_a and clusters_b:
-                keys_a = set(clusters_a.keys())
-                keys_b = set(clusters_b.keys())
-                inter = len(keys_a & keys_b)
-                union = len(keys_a | keys_b)
-                cluster_overlap = inter / union if union > 0 else 0.0
-
-            # ---- 4.10 综合证据构建 ----
-            evidence = EvidenceDetail(
-                name_similarity=round(name_sim, 4),
-                value_overlap=round(jaccard, 4),
-                cardinality=cardinality,
-                co_occurrence_score=round(co_occurrence_score, 4),
-                partition_similarity=round(fd_conf, 4),
-                inclusion_degree=round(max(containment_a_to_b, containment_b_to_a), 4),
-                null_pattern_similarity=round(null_pattern_sim, 4),
-                distribution_similarity=round(dist_sim, 4),
-                datatype_compatibility=round(datatype_compat, 4),
-                minhash_similarity=None,
-                format_similarity=round(format_sim, 4),
-                cluster_overlap=round(cluster_overlap, 4),
-            )
-
-            # ---- 4.9 综合权重 ----
-            weighted_score = (
-                cls.EVIDENCE_WEIGHTS["fd_confidence"] * fd_conf +
-                cls.EVIDENCE_WEIGHTS["inclusion"] * max(containment_a_to_b, containment_b_to_a) +
-                cls.EVIDENCE_WEIGHTS["value_jaccard"] * jaccard +
-                cls.EVIDENCE_WEIGHTS["name_similarity"] * name_sim +
-                cls.EVIDENCE_WEIGHTS["datatype"] * datatype_compat +
-                cls.EVIDENCE_WEIGHTS["distribution"] * dist_sim +
-                cls.EVIDENCE_WEIGHTS["null_pattern"] * null_pattern_sim +
-                cls.EVIDENCE_WEIGHTS["format_similarity"] * format_sim +
-                cls.EVIDENCE_WEIGHTS["cluster_overlap"] * cluster_overlap
-            )
-            weight = round(min(1.0, weighted_score), 4)
-
-            if weight < 0.3:
-                continue
-
-            # ---- 4.10 边类型决策 ----
-            candidate_edges = []
-
-            # A) FD Confidence 高
-            if fd_conf > partition_threshold:
-                candidate_edges.append(GraphEdge(
-                    source_column=col_a,
-                    target_column=col_b,
-                    edge_type=EdgeType.FUNCTIONAL_DEPENDENCY,
-                    weight=weight,
-                    evidence=evidence
-                ))
-
-            # B) 包含依赖强 -> POSSIBLE_FK
-            if containment_a_to_b > inclusion_threshold:
-                candidate_edges.append(GraphEdge(
-                    source_column=col_a,
-                    target_column=col_b,
-                    edge_type=EdgeType.POSSIBLE_FK,
-                    weight=weight,
-                    evidence=evidence
-                ))
-            if containment_b_to_a > inclusion_threshold:
-                candidate_edges.append(GraphEdge(
-                    source_column=col_b,
-                    target_column=col_a,
-                    edge_type=EdgeType.POSSIBLE_FK,
-                    weight=weight,
-                    evidence=evidence
-                ))
-
-            # C) 相似但不满足 FK/FD
-            if not candidate_edges:
-                if jaccard > 0.5 or name_sim > 0.7:
-                    candidate_edges.append(GraphEdge(
-                        source_column=col_a,
-                        target_column=col_b,
-                        edge_type=EdgeType.SIMILAR_TO,
-                        weight=weight,
-                        evidence=evidence
-                    ))
-                elif weight > 0.4:
-                    candidate_edges.append(GraphEdge(
-                        source_column=col_a,
-                        target_column=col_b,
-                        edge_type=EdgeType.CO_OCCURS_WITH,
-                        weight=weight,
-                        evidence=evidence
-                    ))
-
-            edges.extend(candidate_edges)
-
-        # ============================================================
-        # Phase 5: 去重边
-        # ============================================================
-
-        unique_edges = {}
-        for edge in edges:
-            key = (edge.source_column, edge.target_column, edge.edge_type)
-            if key not in unique_edges or edge.weight > unique_edges[key].weight:
-                unique_edges[key] = edge
-        edges = list(unique_edges.values())
-
-        logger.info(f"Built Evidence Graph with {len(nodes)} nodes and {len(edges)} edges.")
-        return EvidenceGraph(nodes=nodes, edges=edges)
-
-    # ============================================================
-    # 辅助方法：列内特征
-    # ============================================================
-
-    @classmethod
-    def _compute_entropy(cls, series: pd.Series) -> float:
-        """计算信息熵"""
-        if series.empty:
-            return 0.0
-        probs = series.value_counts(normalize=True)
-        return -sum(p * math.log2(p) for p in probs if p > 0)
-
-    @classmethod
-    def _compute_monotonicity(cls, series: pd.Series) -> float:
-        """
-        计算列的单调性得分（0~1）
-        用于区分递增 ID 与随机金额
-        判断是否严格单调递增/递减
-        """
-        s = series.dropna()
-        if len(s) < 3:
-            return 0.5
-        # 检查是否排序
-        is_ascending = s.is_monotonic_increasing
-        is_descending = s.is_monotonic_decreasing
-        if is_ascending or is_descending:
-            # 检查是否严格（无重复）
-            if s.is_unique:
-                return 1.0
-            else:
-                return 0.8
-        # 检查大部分是否有序（计算相邻差值符号一致性）
-        diff = s.diff().dropna()
-        if len(diff) == 0:
-            return 0.0
-        positive = (diff > 0).sum()
-        negative = (diff < 0).sum()
-        total = len(diff)
-        if total == 0:
-            return 0.0
-        # 如果有 80% 以上为正或负，认为有单调趋势
-        max_ratio = max(positive, negative) / total
-        return round(max_ratio, 4)
-
-    @classmethod
-    def _calculate_pk_score(cls, profile: ColumnProfileIR, series: pd.Series) -> float:
-        """
-        计算主键候选评分（升级版）
-        新增：单调性检测，区分 ID 与金额
-        """
+            col_semantic_vector_dict = col_semantic_vector.model_dump()
+        except Exception as e:
+            logger.warning(f"Failed to generate ColumnSemanticVector for {profile.column_name}: {e}")
+        
+        return GraphNode(
+            column_name=profile.column_name,
+            properties={
+                **profile.model_dump(exclude={'_value_set'}),
+                "pk_score": pk_score,
+                "entropy": entropy,
+                "behavior_fingerprint": behavior_fingerprint,
+                "has_id_pattern": NodeBuilder._detect_id_pattern(profile.column_name),
+                "column_semantic_vector": col_semantic_vector_dict,
+            }
+        )
+    
+    @staticmethod
+    def _calculate_pk_score(profile: ColumnProfileIR, series: pd.Series) -> float:
+        """计算主键候选评分"""
         col_lower = profile.column_name.lower()
-
-        # 语义得分
+        semantic_score = 0.2
         if any(kw in col_lower for kw in ['id', 'code', 'no', 'key', 'pk']):
             semantic_score = 1.0
         elif any(kw in col_lower for kw in ['name', 'desc', 'title']):
             semantic_score = 0.5
-        else:
-            semantic_score = 0.2
-
-        # 数据类型得分
-        if profile.data_type == "numeric":
+        
+        if profile.storage_type == "integer" or profile.storage_type == "float":
             if profile.unique_ratio > 0.9 and profile.min is not None and profile.min >= 0:
                 datatype_score = 0.9
             else:
@@ -473,40 +84,48 @@ class EvidenceGraphBuilder:
             datatype_score = 0.7
         else:
             datatype_score = 0.3
-
-        # 单调性得分（新增）
-        monotonicity_score = cls._compute_monotonicity(series)
-
+        
+        monotonicity_score = NodeBuilder._compute_monotonicity(series)
+        
         score = (
-            cls.PK_WEIGHTS["unique_ratio"] * profile.unique_ratio +
-            cls.PK_WEIGHTS["null_ratio"] * (1 - profile.null_ratio) +
-            cls.PK_WEIGHTS["semantic"] * semantic_score +
-            cls.PK_WEIGHTS["datatype"] * datatype_score +
-            cls.PK_WEIGHTS["monotonicity"] * monotonicity_score
+            0.35 * profile.unique_ratio +
+            0.20 * (1 - profile.null_ratio) +
+            0.25 * semantic_score +
+            0.10 * datatype_score +
+            0.10 * monotonicity_score
         )
         return round(score, 4)
-
-    @classmethod
-    def _compute_behavior_fingerprint(cls, series: pd.Series, sample_rows: int = 2000) -> Dict[str, Any]:
-        """
-        计算列的行为指纹（多维）
-        用于 Candidate Generation / Blocking
-        包含：变化率、平均连续长度、基数比、熵、空值率、十六进制签名
-        """
+    
+    @staticmethod
+    def _compute_monotonicity(series: pd.Series) -> float:
+        s = series.dropna()
+        if len(s) < 3:
+            return 0.5
+        is_ascending = s.is_monotonic_increasing
+        is_descending = s.is_monotonic_decreasing
+        if is_ascending or is_descending:
+            if s.is_unique:
+                return 1.0
+            return 0.8
+        diff = s.diff().dropna()
+        if len(diff) == 0:
+            return 0.0
+        positive = (diff > 0).sum()
+        negative = (diff < 0).sum()
+        total = len(diff)
+        if total == 0:
+            return 0.0
+        max_ratio = max(positive, negative) / total
+        return round(max_ratio, 4)
+    
+    @staticmethod
+    def _compute_behavior_fingerprint(series: pd.Series, sample_rows: int) -> Dict[str, Any]:
         s = series.head(sample_rows)
         valid = s.dropna()
         total = len(s)
-        valid_count = len(valid)
-
         if total == 0:
-            return {
-                "change_rate": 0.0,
-                "avg_run_length": 0.0,
-                "cardinality_ratio": 0.0,
-                "hex_signature": "0x0"
-            }
-
-        # 变化率
+            return {"change_rate": 0.0, "avg_run_length": 0.0, "cardinality_ratio": 0.0, "hex_signature": "0x0"}
+        
         if total > 1:
             changes = (s != s.shift(1)).astype(int).iloc[1:]
             change_rate = changes.sum() / len(changes) if len(changes) > 0 else 0.0
@@ -515,9 +134,8 @@ class EvidenceGraphBuilder:
         else:
             change_rate = 0.0
             hex_signature = "0x0"
-
-        # 平均连续运行长度
-        if total > 1 and valid_count > 0:
+        
+        if total > 1 and len(valid) > 0:
             diff = (s != s.shift(1)).astype(int)
             run_ends = diff[diff == 1].index.tolist()
             if run_ends:
@@ -527,17 +145,12 @@ class EvidenceGraphBuilder:
                 avg_run_length = total
         else:
             avg_run_length = 0.0
-
-        # 前100行唯一值占比
+        
         head_100 = valid.head(min(100, len(valid)))
         cardinality_ratio = head_100.nunique() / len(head_100) if len(head_100) > 0 else 0.0
-
-        # 熵（已有）
-        entropy = cls._compute_entropy(series)
-
-        # 空值比例
+        entropy = EvidenceCalculator._compute_entropy(series)
         null_ratio = series.isna().sum() / len(series) if len(series) > 0 else 1.0
-
+        
         return {
             "change_rate": round(change_rate, 4),
             "avg_run_length": round(avg_run_length, 2),
@@ -546,124 +159,242 @@ class EvidenceGraphBuilder:
             "null_ratio": round(null_ratio, 4),
             "hex_signature": hex_signature,
         }
-
-    @classmethod
-    def _group_by_behavior_buckets(cls, nodes: List[GraphNode]) -> Dict[str, List[str]]:
-        """
-        基于行为指纹进行宽松分桶（Blocking）
-        使用粗粒度 Bucket，而非精确 Key，避免 False Negative
-        
-        分桶策略：
-        - change_rate: 按 0.1 步长分桶 (0-1 共 10 桶)
-        - entropy: 按 2.0 步长分桶 (0-10 共 5 桶) 
-        - cardinality_ratio: 按 0.2 步长分桶 (0-1 共 5 桶)
-        """
-        buckets: Dict[str, List[str]] = defaultdict(list)
-
-        for node in nodes:
-            fp = node.properties.get("behavior_fingerprint", {})
-            if not fp:
-                # 降级：单独成组
-                buckets[f"single_{node.column_name}"].append(node.column_name)
-                continue
-
-            # 粗粒度分桶
-            change_bucket = int(fp.get("change_rate", 0) * 10)  # 0-10
-            entropy_bucket = int(fp.get("entropy", 0) / 2)      # 0-5
-            cardinality_bucket = int(fp.get("cardinality_ratio", 0) * 5)  # 0-5
-
-            # 组合成 Group Key（宽松）
-            bucket_key = f"b{change_bucket}_e{entropy_bucket}_c{cardinality_bucket}"
-            buckets[bucket_key].append(node.column_name)
-
-        # 只返回 size > 1 的组
-        return {k: v for k, v in buckets.items() if len(v) > 1}
-
-    @classmethod
-    def _detect_id_pattern(cls, column_name: str) -> bool:
-        """检测列名是否包含 ID/Code 模式"""
+    
+    @staticmethod
+    def _detect_id_pattern(column_name: str) -> bool:
         col_lower = column_name.lower()
         return any(kw in col_lower for kw in ['_id', 'id_', '_code', 'code_', '_no', 'no_'])
-
-    # ============================================================
-    # 辅助方法：列间证据
-    # ============================================================
-
-    @classmethod
-    def _compute_anchor_score(cls, node: GraphNode, profile: ColumnProfileIR) -> float:
-        """
-        计算列的锚点优先级评分（用于跨块采样）
-        综合 PK 候选性、唯一性、代码模式、语义多样性。
-        避免过度依赖 PK 名称（如 SAP 的 MATNR 不含 id/code 但仍是关键外键）。
-        """
-        # 1. PK Score (权重 0.4)
+    
+    @staticmethod
+    def compute_anchor_score(node: GraphNode, profile: ColumnProfileIR) -> float:
         pk_score = node.properties.get("pk_score", 0.0)
-
-        # 2. Uniqueness (权重 0.3) - 直接从 profile 获取
         uniqueness = profile.unique_ratio
-
-        # 3. Pattern Score (权重 0.2) - 检测 code/id 模式（包括 SAP 风格）
+        
         col_lower = profile.column_name.lower()
         code_patterns = ['id', 'code', 'no', 'num', 'key', 'sku', 'matnr', 'kunnr', 'bukrs', 'werks', 'vkorg']
         pattern_score = 1.0 if any(p in col_lower for p in code_patterns) else 0.0
-        
-        # 如果列名包含大写字母+数字组合（如 MATNR, VKORG），视为代码模式
         if re.search(r'[A-Z]{2,}[0-9]', profile.column_name):
             pattern_score = max(pattern_score, 0.8)
-        
-        # 如果 pattern 本身就是 code（由 Profiler 推断），也加分
         if profile.pattern == "code":
             pattern_score = max(pattern_score, 0.9)
-
-        # 4. Semantic Diversity (权重 0.1) - 高熵意味着更像标识符而非度量值
+        
         entropy = node.properties.get("entropy", 0)
-        # 假设熵 > 5 表示高多样性（例如 ID 通常有 8-12 的熵值）
         diversity = min(1.0, entropy / 10.0)
+        
+        return round(0.4 * pk_score + 0.3 * uniqueness + 0.2 * pattern_score + 0.1 * diversity, 4)
 
-        anchor_score = (0.4 * pk_score) + (0.3 * uniqueness) + (0.2 * pattern_score) + (0.1 * diversity)
-        return round(anchor_score, 4)
 
-    @classmethod
-    def _compute_fd_confidence(cls, col_a: pd.Series, col_b: pd.Series) -> float:
-        """计算 A -> B 的函数依赖置信度（行数比例版）"""
+class CandidateGenerator:
+    """候选列对生成器"""
+    
+    BLOCKING_THRESHOLD = 50
+    
+    @staticmethod
+    def generate(
+        profiles: List[ColumnProfileIR], 
+        nodes: List[GraphNode],
+        enable_blocking: bool = True,
+        max_cross_block_pairs: int = 200
+    ) -> List[Tuple[str, str]]:
+        col_names = [p.column_name for p in profiles]
+        candidate_pairs = []
+        
+        if enable_blocking and len(profiles) > CandidateGenerator.BLOCKING_THRESHOLD:
+            block_groups = CandidateGenerator._group_by_behavior_buckets(nodes)
+            
+            for block_cols in block_groups.values():
+                if len(block_cols) > 1:
+                    for i in range(len(block_cols)):
+                        for j in range(i + 1, len(block_cols)):
+                            candidate_pairs.append((block_cols[i], block_cols[j]))
+            
+            # 锚点采样
+            col_name_map = {p.column_name: p for p in profiles}
+            sorted_nodes = sorted(
+                nodes,
+                key=lambda x: NodeBuilder.compute_anchor_score(x, col_name_map[x.column_name]),
+                reverse=True
+            )
+            anchor_cols = []
+            for node in sorted_nodes:
+                if len(anchor_cols) >= max(5, int(len(nodes) * 0.05)):
+                    break
+                anchor_cols.append(node.column_name)
+            
+            cross_block_count = 0
+            for anchor in anchor_cols:
+                for col in col_names:
+                    if anchor == col:
+                        continue
+                    if (anchor, col) in candidate_pairs or (col, anchor) in candidate_pairs:
+                        continue
+                    candidate_pairs.append((anchor, col))
+                    cross_block_count += 1
+                    if cross_block_count >= max_cross_block_pairs:
+                        break
+                if cross_block_count >= max_cross_block_pairs:
+                    break
+            
+            candidate_pairs = list(set([tuple(sorted(p)) for p in candidate_pairs]))
+        else:
+            n = len(col_names)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    candidate_pairs.append((col_names[i], col_names[j]))
+        
+        return candidate_pairs
+    
+    @staticmethod
+    def _group_by_behavior_buckets(nodes: List[GraphNode]) -> Dict[str, List[str]]:
+        buckets = defaultdict(list)
+        for node in nodes:
+            fp = node.properties.get("behavior_fingerprint", {})
+            if not fp:
+                buckets[f"single_{node.column_name}"].append(node.column_name)
+                continue
+            change_bucket = int(fp.get("change_rate", 0) * 10)
+            entropy_bucket = int(fp.get("entropy", 0) / 2)
+            cardinality_bucket = int(fp.get("cardinality_ratio", 0) * 5)
+            bucket_key = f"b{change_bucket}_e{entropy_bucket}_c{cardinality_bucket}"
+            buckets[bucket_key].append(node.column_name)
+        return {k: v for k, v in buckets.items() if len(v) > 1}
+
+
+class EvidenceCalculator:
+    """多维度证据计算器"""
+    
+    @staticmethod
+    def compute(
+        col_a: str, col_b: str,
+        profile_a: ColumnProfileIR, profile_b: ColumnProfileIR,
+        col_value_sets: Dict[str, Set[str]],
+        df: pd.DataFrame
+    ) -> EvidenceDetail:
+        # 列名相似度
+        name_sim = EvidenceCalculator._compute_name_similarity(col_a, col_b)
+        
+        # 值 Jaccard + 包含依赖
+        jaccard, containment_a_to_b, containment_b_to_a, cardinality = \
+            EvidenceCalculator._compute_value_overlap(col_value_sets, col_a, col_b)
+        
+        # FD 置信度
+        fd_conf = EvidenceCalculator._compute_fd_confidence(df[col_a], df[col_b])
+        
+        # 空值模式
+        null_pattern_sim = EvidenceCalculator._compute_null_pattern_similarity(df[col_a], df[col_b])
+        
+        # 分布相似度
+        dist_sim = EvidenceCalculator._compute_distribution_similarity(df[col_a], df[col_b])
+        
+        # 存储类型兼容性
+        storage_compat = EvidenceCalculator._compute_storage_type_compatibility(profile_a, profile_b)
+        
+        # 共现得分
+        co_occurrence = EvidenceCalculator._compute_co_occurrence(profile_a, profile_b)
+        
+        # 格式相似度
+        format_sim = EvidenceCalculator._compute_format_similarity(profile_a, profile_b)
+        
+        # 聚类重叠
+        cluster_overlap = EvidenceCalculator._compute_cluster_overlap(profile_a, profile_b)
+        
+        # 逻辑类型匹配
+        logical_match = EvidenceCalculator._compute_logical_type_match(profile_a, profile_b)
+        
+        # 语义重叠
+        semantic_overlap = EvidenceCalculator._compute_semantic_overlap(profile_a, profile_b)
+        
+        # 模式匹配
+        pattern_match = EvidenceCalculator._compute_pattern_match(profile_a, profile_b)
+        
+        # 结构签名匹配
+        structural_match = EvidenceCalculator._compute_structural_signature_match(profile_a, profile_b)
+        
+        return EvidenceDetail(
+            name_similarity=round(name_sim, 4),
+            value_overlap=round(jaccard, 4),
+            cardinality=cardinality,
+            co_occurrence_score=round(co_occurrence, 4),
+            partition_similarity=round(fd_conf, 4),
+            inclusion_degree=round(max(containment_a_to_b, containment_b_to_a), 4),
+            null_pattern_similarity=round(null_pattern_sim, 4),
+            distribution_similarity=round(dist_sim, 4),
+            datatype_compatibility=round(storage_compat, 4),
+            minhash_similarity=None,
+            format_similarity=round(format_sim, 4),
+            cluster_overlap=round(cluster_overlap, 4),
+            logical_type_match=round(logical_match, 4),
+            semantic_overlap=round(semantic_overlap, 4),
+            pattern_match=round(pattern_match, 4),
+            structural_signature_match=round(structural_match, 4),
+        )
+    
+    # ---- 私有辅助方法 ----
+    
+    @staticmethod
+    def _compute_name_similarity(col_a: str, col_b: str) -> float:
+        if HAS_TEXTDISTANCE:
+            return textdistance.jaro_winkler(col_a.lower(), col_b.lower())
+        return difflib.SequenceMatcher(None, col_a.lower(), col_b.lower()).ratio()
+    
+    @staticmethod
+    def _compute_value_overlap(
+        col_value_sets: Dict[str, Set[str]], col_a: str, col_b: str
+    ) -> Tuple[float, float, float, Optional[str]]:
+        set_a = col_value_sets.get(col_a, set())
+        set_b = col_value_sets.get(col_b, set())
+        jaccard = 0.0
+        containment_a_to_b = 0.0
+        containment_b_to_a = 0.0
+        cardinality = None
+        
+        if set_a and set_b:
+            inter = len(set_a & set_b)
+            union = len(set_a | set_b)
+            jaccard = inter / union if union > 0 else 0.0
+            containment_a_to_b = inter / len(set_a) if len(set_a) > 0 else 0.0
+            containment_b_to_a = inter / len(set_b) if len(set_b) > 0 else 0.0
+            if inter > 0:
+                if len(set_a) > len(set_b) and inter == len(set_b):
+                    cardinality = "many_to_one"
+                elif len(set_b) > len(set_a) and inter == len(set_a):
+                    cardinality = "one_to_many"
+                elif len(set_a) == len(set_b) and inter == len(set_a):
+                    cardinality = "one_to_one"
+        return jaccard, containment_a_to_b, containment_b_to_a, cardinality
+    
+    @staticmethod
+    def _compute_fd_confidence(col_a: pd.Series, col_b: pd.Series) -> float:
         valid_mask = col_a.notna() & col_b.notna()
         if valid_mask.sum() == 0:
             return 0.0
-
         a = col_a[valid_mask]
         b = col_b[valid_mask]
-
         try:
             df_temp = pd.DataFrame({'a': a, 'b': b})
             correct_count = df_temp.groupby('a')['b'].agg(
                 lambda x: x.value_counts().max() if len(x) > 0 else 0
             ).sum()
             total = len(a)
-            confidence = correct_count / total if total > 0 else 0.0
-            return round(confidence, 4)
+            return round(correct_count / total if total > 0 else 0.0, 4)
         except Exception:
             return 0.0
-
-    @classmethod
-    def _compute_null_pattern_similarity(cls, col_a: pd.Series, col_b: pd.Series) -> float:
-        """空值模式对齐（弱证据）"""
+    
+    @staticmethod
+    def _compute_null_pattern_similarity(col_a: pd.Series, col_b: pd.Series) -> float:
         mask_a = col_a.isna()
         mask_b = col_b.isna()
         both_null = (mask_a & mask_b).sum()
         both_not_null = (~mask_a & ~mask_b).sum()
         total = len(col_a)
-        if total == 0:
-            return 0.0
-        return (both_null + both_not_null) / total
-
-    @classmethod
-    def _compute_distribution_similarity(cls, col_a: pd.Series, col_b: pd.Series) -> float:
-        """分布相似度（弱证据）"""
+        return (both_null + both_not_null) / total if total > 0 else 0.0
+    
+    @staticmethod
+    def _compute_distribution_similarity(col_a: pd.Series, col_b: pd.Series) -> float:
         a = col_a.dropna()
         b = col_b.dropna()
         if a.empty or b.empty:
             return 0.0
-
         if pd.api.types.is_numeric_dtype(a) and pd.api.types.is_numeric_dtype(b):
             quantiles = [0.25, 0.50, 0.75]
             q_a = [a.quantile(q) for q in quantiles]
@@ -688,71 +419,303 @@ class EvidenceGraphBuilder:
                 np.sum(q * np.log((q + 1e-10) / (m + 1e-10)))
             )
             return round(max(0.0, 1.0 - min(1.0, jsd)), 4)
-
-    @classmethod
-    def _get_format_signature(cls, val: Any) -> str:
-        """
-        将单个值转换为格式签名（忽略具体值，只保留结构）:
-        - 连续数字序列 → 'D'
-        - 连续字母序列 → 'A'
-        - 其他字符原样保留（如 -, /, . 等）
-        示例: "2023-01-15" → "D-D-D"  (或 "D-D")
-        """
-        s = str(val)
-        # 将连续数字替换为 'D'
-        s = re.sub(r'\d+', 'D', s)
-        # 将连续字母替换为 'A'（小写不区分）
-        s = re.sub(r'[A-Za-z]+', 'A', s)
-        return s
-
-    @classmethod
-    def _compute_format_similarity(
-        cls, 
-        series_a: pd.Series, 
-        series_b: pd.Series, 
-        sample_size: int = 500
-    ) -> float:
-        """
-        计算两列格式签名的 Jaccard 相似度。
-        仅对非空字符串采样。
-        """
-        sigs_a = set(
-            series_a.dropna().astype(str).head(sample_size).apply(cls._get_format_signature)
-        )
-        sigs_b = set(
-            series_b.dropna().astype(str).head(sample_size).apply(cls._get_format_signature)
-        )
-        if not sigs_a or not sigs_b:
-            return 0.0
-        inter = len(sigs_a & sigs_b)
-        union = len(sigs_a | sigs_b)
-        return inter / union if union > 0 else 0.0
-
-    @classmethod
-    def _compute_datatype_compatibility(cls, profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
-        """数据类型兼容性评分（弱证据）"""
-        if profile_a.data_type == profile_b.data_type:
+    
+    @staticmethod
+    def _compute_storage_type_compatibility(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        st_a = profile_a.storage_type
+        st_b = profile_b.storage_type
+        if st_a == st_b:
             return 1.0
-        if "numeric" in profile_a.data_type and "string" in profile_b.data_type:
-            if "code" in profile_b.candidate_types:
-                return 0.5
+        if (st_a == "integer" and st_b == "float") or (st_a == "float" and st_b == "integer"):
+            return 0.8
+        if (st_a == "string" and st_b in ["integer", "float"]) or (st_b == "string" and st_a in ["integer", "float"]):
             return 0.1
-        if "string" in profile_a.data_type and "numeric" in profile_b.data_type:
-            if "code" in profile_a.candidate_types:
-                return 0.5
-            return 0.1
-        return 0.3
+        return 0.0
+    
+    @staticmethod
+    def _compute_co_occurrence(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        if profile_a.table_name and profile_b.table_name:
+            if profile_a.table_name == profile_b.table_name:
+                return 0.6
+            elif profile_a.dataset_name == profile_b.dataset_name:
+                return 0.3
+            else:
+                return 0.1
+        return 0.5 if profile_a.dataset_name == profile_b.dataset_name else 0.2
+    
+    @staticmethod
+    def _compute_format_similarity(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        sig_a = profile_a.structural_signature_detail
+        sig_b = profile_b.structural_signature_detail
+        if sig_a and sig_b and sig_a.get('signature') == sig_b.get('signature'):
+            return 1.0
+        return 0.0
+    
+    @staticmethod
+    def _compute_cluster_overlap(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        clusters_a = profile_a.value_similarity_clusters or {}
+        clusters_b = profile_b.value_similarity_clusters or {}
+        if not clusters_a or not clusters_b:
+            return 0.0
+        keys_a = set(clusters_a.keys())
+        keys_b = set(clusters_b.keys())
+        inter = len(keys_a & keys_b)
+        union = len(keys_a | keys_b)
+        return inter / union if union > 0 else 0.0
+    
+    @staticmethod
+    def _compute_logical_type_match(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        if profile_a.logical_type == "unknown" or profile_b.logical_type == "unknown":
+            return 0.0
+        return 1.0 if profile_a.logical_type == profile_b.logical_type else 0.0
+    
+    @staticmethod
+    def _compute_semantic_overlap(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        overlap = 0.0
+        for ca in profile_a.semantic_candidates:
+            for cb in profile_b.semantic_candidates:
+                if ca.type == cb.type:
+                    score = ca.confidence * cb.confidence
+                    if score > overlap:
+                        overlap = score
+        return overlap
+    
+    @staticmethod
+    def _compute_pattern_match(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        match = 0.0
+        for pa in profile_a.pattern_fingerprints:
+            for pb in profile_b.pattern_fingerprints:
+                if pa.pattern_name == pb.pattern_name and pa.coverage > 0.7 and pb.coverage > 0.7:
+                    score = pa.confidence * pb.confidence
+                    if score > match:
+                        match = score
+        return match
+    
+    @staticmethod
+    def _compute_structural_signature_match(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        sig_a = profile_a.structural_signature_detail
+        sig_b = profile_b.structural_signature_detail
+        if sig_a and sig_b and sig_a.get('signature') == sig_b.get('signature'):
+            return 1.0
+        return 0.0
+    
+    @staticmethod
+    def _compute_entropy(series: pd.Series) -> float:
+        if series.empty:
+            return 0.0
+        probs = series.value_counts(normalize=True)
+        return -sum(p * math.log2(p) for p in probs if p > 0)
 
-    # ============================================================
-    # 预留：复合主键发现接口
-    # ============================================================
+    @staticmethod
+    def _compute_statistical_vector_similarity(profile_a: ColumnProfileIR, profile_b: ColumnProfileIR) -> float:
+        """使用 ColumnSemanticVector 计算两列的统计指纹相似度"""
+        from app.evidence.column_embedding_vector import ColumnSemanticVector
+        try:
+            # 构建两个 ColumnSemanticVector 对象（只需填充必要字段）
+            vec_a = ColumnSemanticVector(
+                datatype=profile_a.storage_type,
+                cardinality=profile_a.distinct_count,
+                uniqueness=profile_a.unique_ratio,
+                null_ratio=profile_a.null_ratio,
+                entropy=profile_a.entropy or 0.0,
+                avg_length=profile_a.avg_length,
+                pattern_signature=profile_a.pattern or "unknown",
+                distribution_profile=profile_a.percentiles or {},
+                candidate_types=profile_a.candidate_types or []
+            )
+            vec_b = ColumnSemanticVector(
+                datatype=profile_b.storage_type,
+                cardinality=profile_b.distinct_count,
+                uniqueness=profile_b.unique_ratio,
+                null_ratio=profile_b.null_ratio,
+                entropy=profile_b.entropy or 0.0,
+                avg_length=profile_b.avg_length,
+                pattern_signature=profile_b.pattern or "unknown",
+                distribution_profile=profile_b.percentiles or {},
+                candidate_types=profile_b.candidate_types or []
+            )
+            return vec_a.similarity_to(vec_b)
+        except Exception as e:
+            logger.warning(f"Failed to compute statistical vector similarity: {e}")
+            return 0.0
 
+
+class WeightedFusionEngine:
+    """权重融合引擎"""
+    
+    # 证据权重配置
+    WEIGHTS = {
+        "fd_confidence": 0.18,
+        "inclusion": 0.14,
+        "value_jaccard": 0.08,
+        "name_similarity": 0.05,
+        "datatype_compatibility": 0.04,
+        "distribution": 0.04,
+        "null_pattern": 0.04,
+        "format_similarity": 0.08,
+        "cluster_overlap": 0.08,
+        "logical_type_match": 0.10,
+        "semantic_overlap": 0.08,
+        "pattern_match": 0.05,
+        "statistical_vector_similarity": 0.04,
+    }
+    
     @classmethod
-    def _compute_composite_key_score(
+    def fuse(cls, evidence: EvidenceDetail) -> float:
+        """融合多维度证据，计算综合权重"""
+        if evidence is None:
+            return 0.0
+        
+        weighted_score = (
+            cls.WEIGHTS["fd_confidence"] * (evidence.partition_similarity or 0.0) +
+            cls.WEIGHTS["inclusion"] * (evidence.inclusion_degree or 0.0) +
+            cls.WEIGHTS["value_jaccard"] * (evidence.value_overlap or 0.0) +
+            cls.WEIGHTS["name_similarity"] * (evidence.name_similarity or 0.0) +
+            cls.WEIGHTS["datatype_compatibility"] * (evidence.datatype_compatibility or 0.0) +
+            cls.WEIGHTS["distribution"] * (evidence.distribution_similarity or 0.0) +
+            cls.WEIGHTS["null_pattern"] * (evidence.null_pattern_similarity or 0.0) +
+            cls.WEIGHTS["format_similarity"] * (evidence.format_similarity or 0.0) +
+            cls.WEIGHTS["cluster_overlap"] * (evidence.cluster_overlap or 0.0) +
+            cls.WEIGHTS["logical_type_match"] * (evidence.logical_type_match or 0.0) +
+            cls.WEIGHTS["semantic_overlap"] * (evidence.semantic_overlap or 0.0) +
+            cls.WEIGHTS["pattern_match"] * (evidence.pattern_match or 0.0) +
+            cls.WEIGHTS["structural_signature_match"] * (evidence.structural_signature_match or 0.0) +
+            cls.WEIGHTS["statistical_vector_similarity"] * (evidence.statistical_vector_similarity or 0.0)
+        )
+        return round(min(1.0, weighted_score), 4)
+
+
+class EdgeTypeDecider:
+    """边类型决策器"""
+    
+    @staticmethod
+    def decide(
+        evidence: EvidenceDetail, 
+        weight: float,
+        fd_threshold: float = 0.8,
+        inclusion_threshold: float = 0.9
+    ) -> List[GraphEdge]:
+        """根据证据和权重决定边类型"""
+        candidate_edges = []
+        containment_a_to_b = evidence.inclusion_degree or 0.0
+        jaccard = evidence.value_overlap or 0.0
+        name_sim = evidence.name_similarity or 0.0
+        logical_match = evidence.logical_type_match or 0.0
+        semantic_overlap = evidence.semantic_overlap or 0.0
+        
+        if evidence.partition_similarity and evidence.partition_similarity > fd_threshold:
+            candidate_edges.append(EdgeType.FUNCTIONAL_DEPENDENCY)
+        
+        if containment_a_to_b > inclusion_threshold:
+            candidate_edges.append(EdgeType.POSSIBLE_FK)
+        
+        if not candidate_edges:
+            if jaccard > 0.5 or name_sim > 0.7 or logical_match > 0.5 or semantic_overlap > 0.5:
+                candidate_edges.append(EdgeType.SIMILAR_TO)
+            elif weight > 0.4:
+                candidate_edges.append(EdgeType.CO_OCCURS_WITH)
+        
+        return candidate_edges
+
+
+class EvidenceGraphBuilder:
+    """证据图构建器（主入口）"""
+    
+    @classmethod
+    def build(
         cls,
+        profiles: List[ColumnProfileIR],
         df: pd.DataFrame,
-        candidates: List[str],
-        max_combination: int = 3
-    ) -> Dict[Tuple[str, ...], float]:
-        """预留：复合主键发现"""
-        return {}
+        name_sim_threshold: float = 0.6,
+        overlap_threshold: float = 0.3,
+        partition_threshold: float = 0.8,
+        inclusion_threshold: float = 0.9,
+        max_sample_for_overlap: int = 5000,
+        use_sampling: bool = True,
+        enable_blocking: bool = True,
+        max_cross_block_pairs: int = 200
+    ) -> EvidenceGraph:
+        """构建证据图"""
+        # ---------- 1. 构建节点 ----------
+        logger.info("Building Evidence Graph nodes...")
+        col_name_map = {p.column_name: p for p in profiles}
+        nodes = [NodeBuilder.build_node(p, df) for p in profiles]
+        
+        # ---------- 2. 准备值集合 ----------
+        logger.info("Preparing value sets...")
+        col_value_sets = cls._prepare_value_sets(profiles, df, max_sample_for_overlap, use_sampling)
+        
+        # ---------- 3. 生成候选对 ----------
+        logger.info("Generating candidate pairs...")
+        candidate_pairs = CandidateGenerator.generate(
+            profiles, nodes, enable_blocking, max_cross_block_pairs
+        )
+        logger.info(f"  - {len(candidate_pairs)} candidate pairs generated")
+        
+        # ---------- 4. 计算证据 ----------
+        logger.info("Calculating evidence for all candidate pairs...")
+        edges = []
+        for col_a, col_b in candidate_pairs:
+            profile_a = col_name_map[col_a]
+            profile_b = col_name_map[col_b]
+            
+            # 计算证据
+            evidence = EvidenceCalculator.compute(
+                col_a, col_b,
+                profile_a, profile_b,
+                col_value_sets,
+                df
+            )
+            
+            # 融合权重
+            weight = WeightedFusionEngine.fuse(evidence)
+            
+            if weight < 0.3:
+                continue
+            
+            # 决定边类型
+            edge_types = EdgeTypeDecider.decide(evidence, weight, partition_threshold, inclusion_threshold)
+            
+            if edge_types:
+                for edge_type in edge_types:
+                    edges.append(GraphEdge(
+                        source_column=col_a,
+                        target_column=col_b,
+                        edge_type=edge_type,
+                        weight=weight,
+                        evidence=evidence
+                    ))
+        
+        # ---------- 5. 去重 ----------
+        unique_edges = {}
+        for edge in edges:
+            key = (edge.source_column, edge.target_column, edge.edge_type)
+            if key not in unique_edges or edge.weight > unique_edges[key].weight:
+                unique_edges[key] = edge
+        edges = list(unique_edges.values())
+        
+        logger.info(f"Built Evidence Graph with {len(nodes)} nodes and {len(edges)} edges.")
+        return EvidenceGraph(nodes=nodes, edges=edges)
+    
+    @staticmethod
+    def _prepare_value_sets(
+        profiles: List[ColumnProfileIR],
+        df: pd.DataFrame,
+        max_sample_for_overlap: int,
+        use_sampling: bool
+    ) -> Dict[str, Set[str]]:
+        col_value_sets = {}
+        for profile in profiles:
+            if profile._value_set is not None:
+                col_value_sets[profile.column_name] = profile._value_set
+            else:
+                series_raw = df[profile.column_name].dropna().astype(str)
+                if use_sampling and len(series_raw) > max_sample_for_overlap:
+                    sampled_values = set(series_raw.sample(
+                        n=max_sample_for_overlap,
+                        random_state=42
+                    ).values)
+                else:
+                    sampled_values = set(series_raw.values)
+                col_value_sets[profile.column_name] = sampled_values
+        return col_value_sets

@@ -29,7 +29,7 @@ COPY . .
 #    这一步会触发 pandas-type-detector / Presidio 的完整初始化，
 #    并将模型加载到内存中，后续运行将直接使用缓存。
 #    若预加载失败（例如网络超时），构建会立刻报错，便于提前定位问题。
-RUN python -c "from app.schema.semantic_profiler import SemanticProfiler; \
+RUN python -c "from app.profiler.semantic_profiler import SemanticProfiler; \
                print('Preloading detectors...'); \
                SemanticProfiler.preload_all_detectors(); \
                print('Preload completed successfully.')"
