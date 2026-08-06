@@ -1,0 +1,159 @@
+[
+  {
+    "column": "customer_id",
+    "storage_type": "string",
+    "logical_type": "fixed_length_code",
+    "unique_ratio": 1.0,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [],
+    "semantic_candidates": [
+      {
+        "type": "Code",
+        "confidence": 0.6
+      }
+    ],
+    "numeric_density": 0.8,
+    "length_std": 0.0
+  },
+  {
+    "column": "full_name",
+    "storage_type": "string",
+    "logical_type": "free_text",
+    "unique_ratio": 0.63,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [],
+    "semantic_candidates": [],
+    "numeric_density": 0.0,
+    "length_std": 1.6
+  },
+  {
+    "column": "email",
+    "storage_type": "string",
+    "logical_type": "email_like",
+    "unique_ratio": 1.0,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [
+      {
+        "pattern": "email",
+        "coverage": 1.0
+      }
+    ],
+    "semantic_candidates": [
+      {
+        "type": "Email",
+        "confidence": 0.99
+      }
+    ],
+    "numeric_density": 0.1069,
+    "length_std": 0.31
+  },
+  {
+    "column": "phone",
+    "storage_type": "string",
+    "logical_type": "phone_like",
+    "unique_ratio": 1.0,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [
+      {
+        "pattern": "phone",
+        "coverage": 1.0
+      }
+    ],
+    "semantic_candidates": [
+      {
+        "type": "Phone",
+        "confidence": 0.99
+      }
+    ],
+    "numeric_density": 0.9167,
+    "length_std": 0.0
+  },
+  {
+    "column": "amount",
+    "storage_type": "float",
+    "logical_type": "unknown",
+    "unique_ratio": 0.7473684210526316,
+    "null_ratio": 0.05,
+    "pattern_fingerprints": [],
+    "semantic_candidates": [],
+    "numeric_density": 0.0,
+    "length_std": 0.0
+  },
+  {
+    "column": "order_date",
+    "storage_type": "string",
+    "logical_type": "phone_like",
+    "unique_ratio": 0.51,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [
+      {
+        "pattern": "phone",
+        "coverage": 1.0
+      }
+    ],
+    "semantic_candidates": [
+      {
+        "type": "Phone",
+        "confidence": 0.99
+      }
+    ],
+    "numeric_density": 1.0,
+    "length_std": 0.0
+  },
+  {
+    "column": "country_code",
+    "storage_type": "string",
+    "logical_type": "unknown",
+    "unique_ratio": 0.05,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [],
+    "semantic_candidates": [],
+    "numeric_density": 0.0,
+    "length_std": 0.0
+  },
+  {
+    "column": "tax_id",
+    "storage_type": "string",
+    "logical_type": "date_iso_like",
+    "unique_ratio": 1.0,
+    "null_ratio": 0.02,
+    "pattern_fingerprints": [
+      {
+        "pattern": "date_iso",
+        "coverage": 1.0
+      },
+      {
+        "pattern": "phone",
+        "coverage": 1.0
+      }
+    ],
+    "semantic_candidates": [
+      {
+        "type": "Date_Iso",
+        "confidence": 0.99
+      },
+      {
+        "type": "Phone",
+        "confidence": 0.99
+      }
+    ],
+    "numeric_density": 0.8,
+    "length_std": 0.0
+  },
+  {
+    "column": "status",
+    "storage_type": "string",
+    "logical_type": "enum_like",
+    "unique_ratio": 0.04,
+    "null_ratio": 0.0,
+    "pattern_fingerprints": [],
+    "semantic_candidates": [
+      {
+        "type": "Enum",
+        "confidence": 0.6
+      }
+    ],
+    "numeric_density": 0.0,
+    "length_std": 0.99
+  }
+]

@@ -158,22 +158,24 @@ class TechnicalNormalizer:
         def normalize_one(val):
             if pd.isna(val) or val == '':
                 return np.nan
+            original_str = str(val)
+            # 1. 尝试用指定国家码解析
             try:
-                # 自动检测国家码，如果提供了 country_code，则优先使用
-                phone = phonenumbers.parse(val, self.phone_country_code or None)
+                phone = phonenumbers.parse(original_str, self.phone_country_code or None)
                 if phonenumbers.is_valid_number(phone):
                     return phonenumbers.format_number(phone, PhoneNumberFormat.E164)
             except:
-            # 如果解析失败，尝试不指定国家码（自动检测）
-                try:
-                    phone = phonenumbers.parse(str(val), None)
-                    if phonenumbers.is_valid_number(phone):
-                        return phonenumbers.format_number(phone, PhoneNumberFormat.E164)
-                except:
-                    pass
-                # 最终 fallback：仅保留数字和 +
-                cleaned = re.sub(r'[^\d+]', '', str(val))
-                return cleaned if cleaned else np.nan
+                pass
+            # 2. 尝试自动检测国家码
+            try:
+                phone = phonenumbers.parse(original_str, None)
+                if phonenumbers.is_valid_number(phone):
+                    return phonenumbers.format_number(phone, PhoneNumberFormat.E164)
+            except:
+                pass
+            # 3. 最终 fallback：仅保留数字和 '+'，如果结果为空则返回原始值
+            cleaned = re.sub(r'[^\d+]', '', original_str)
+            return cleaned if cleaned else original_str
         return series.apply(normalize_one)
 
     def _normalize_email(self, series: pd.Series, metadata: Dict) -> pd.Series:
@@ -203,7 +205,7 @@ class TechnicalNormalizer:
                 dt = parse_date(str(val), fuzzy=False)
                 return dt.strftime('%Y-%m-%d')
             except:
-                return np.nan
+                return str(val)
         return series.apply(normalize_one)
 
     def _normalize_boolean(self, series: pd.Series, metadata: Dict) -> pd.Series:
