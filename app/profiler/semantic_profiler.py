@@ -6,6 +6,7 @@ import re
 from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple, Set
 from app.profiler.profile_ir import ColumnProfileIR, PatternFingerprint, SemanticCandidate, EntitySummary
+from app.profiler.detectors import DetectorRegistry, DetectionResult
 
 try:
     from pandas_type_detector import TypeDetectionPipeline
@@ -383,23 +384,33 @@ class SemanticProfiler:
         }
 
     @classmethod
-    def _infer_logical_type(cls, valid_series: pd.Series, stats: Dict, pattern_fingerprints: List[PatternFingerprint]) -> str:
+    def _infer_logical_type(
+        cls, 
+        valid_series: pd.Series, 
+        stats: Dict, 
+        pattern_fingerprints: List[PatternFingerprint]
+    ) -> str:
+        """
+        推断逻辑类型。
+        优先使用检测器结果，如果置信度不足则 fallback 到形态推断。
+        """
         if len(valid_series) == 0:
             return "empty"
+        
+        # 1. 优先使用检测器结果
+        high_conf_candidates = [fp for fp in pattern_fingerprints if fp.confidence > 0.5]
+        if high_conf_candidates:
+            best = max(high_conf_candidates, key=lambda x: x.confidence)
+            return f"{best.pattern_name}_like"
+        
+        # 2. Fallback: 形态推断
+        return cls._infer_logical_type_fallback(valid_series, stats)
 
-        # 优先检查高置信度 pattern
-        high_conf_patterns = {
-            "date_iso": 0.8,
-            "email": 0.8,
-            "uuid": 0.9,
-            "phone": 0.7,
-            "url": 0.7,
-        }
-        for fp in pattern_fingerprints:
-            threshold = high_conf_patterns.get(fp.pattern_name, 0.7)
-            if fp.coverage > threshold:
-                return f"{fp.pattern_name}_like"
-
+    @classmethod
+    def _infer_logical_type_fallback(cls, valid_series: pd.Series, stats: Dict) -> str:
+        """
+        基于形态特征的逻辑类型推断（Fallback）
+        """
         str_series = valid_series.astype(str)
         lengths = str_series.str.len()
         length_std = lengths.std() if len(lengths) > 1 else 0.0
@@ -421,37 +432,26 @@ class SemanticProfiler:
 
     @classmethod
     def _detect_pattern_fingerprints(cls, valid_series: pd.Series) -> List[PatternFingerprint]:
+        """
+        检测所有模式（使用新的 DetectorRegistry）
+        """
         if len(valid_series) == 0:
             return []
 
-        str_series = valid_series.astype(str)
-        total = len(str_series)
+        registry = DetectorRegistry()
+        result = registry.detect_all(valid_series)
+        
         fingerprints = []
-
-        thresholds = {
-            "email": 0.8,
-            "date_iso": 0.75,
-            "uuid": 0.9,
-            "phone": 0.7,
-            "currency_code": 0.5,
-            "url": 0.7,
-            "ipv4": 0.6,
-            "hex_color": 0.5,
-        }
-
-        for name, regex in cls._PATTERN_REGEXES.items():
-            matches = str_series.str.match(regex).sum()
-            coverage = matches / total if total > 0 else 0.0
-            min_threshold = thresholds.get(name, 0.5)
-            if coverage > min_threshold:
-                confidence = min(0.6 + coverage * 0.4, 0.99)
+        for candidate in result.candidates:
+            if candidate.confidence > 0.3:  # 只保留置信度 > 0.3 的候选
                 fingerprints.append(PatternFingerprint(
-                    pattern_name=name,
-                    confidence=confidence,
-                    coverage=round(coverage, 4)
+                    pattern_name=candidate.type,
+                    confidence=candidate.confidence,
+                    coverage=candidate.confidence  # 用置信度近似覆盖率
                 ))
-
-        fingerprints.sort(key=lambda x: -x.coverage)
+        
+        # 按置信度降序排序
+        fingerprints.sort(key=lambda x: -x.confidence)
         return fingerprints
 
     @classmethod

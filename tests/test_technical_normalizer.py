@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from app.normalizer.technical_normalizer import TechnicalNormalizer
+from app.legacy.technical_normalizer import TechnicalNormalizer
 
 
 @pytest.fixture

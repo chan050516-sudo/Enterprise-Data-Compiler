@@ -8,7 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from app.config.settings import settings
-from app.normalizer.technical_normalizer import TechnicalNormalizer
+from app.legacy.technical_normalizer import TechnicalNormalizer
 from app.connectors.csv_connector import CSVConnector
 from app.knowledge.knowledge_base import KnowledgeBase
 from app.profiler.semantic_profiler import SemanticProfiler

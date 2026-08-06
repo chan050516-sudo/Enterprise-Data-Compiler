@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from pprint import pprint
 from unittest.mock import patch
-from app.normalizer.technical_normalizer import TechnicalNormalizer
+from app.legacy.technical_normalizer import TechnicalNormalizer
 from app.profiler.semantic_profiler import SemanticProfiler
 from app.evidence.builder import EvidenceGraphBuilder
 
