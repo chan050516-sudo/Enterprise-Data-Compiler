@@ -1,0 +1,758 @@
+(.venv) PS C:\Users\chan0\Personal Project\Enterprise-Data-Compiler> python -m pytest tests\test_integration.py -v -s
+================================================================================= test session starts ==================================================================================
+platform win32 -- Python 3.14.0, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\chan0\Personal Project\Enterprise-Data-Compiler\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: C:\Users\chan0\Personal Project\Enterprise-Data-Compiler
+plugins: anyio-4.13.0, Faker-40.23.0, hypothesis-6.155.2, typeguard-4.5.2
+collected 1 item                                                                                                                                                                        
+
+tests/test_integration.py::test_end_to_end_integration 
+================================================================================
+  EDC 端到端集成测试 - 详细输出
+================================================================================
+
+[原始数据]
+  形状: (100, 9)
+  前5行:
+  customer_id   full_name              email           phone  amount  order_date country_code tax_id     status
+0       C0001  David Chen  user1@company.com   +6012 3656138  192.49  2024.01.01           MY   T001    shipped
+1       C0002  Sarah Wong  user2@company.com     012 2915631   90.06  2024-01-02           MY   T002  delivered
+2       C0003  David Chan  user3@company.com   60-12 3008187  695.96  2024-01-03           MY   T003  delivered
+3       C0004      Bob Ng  user4@company.com     012 3148815  979.72  2024-01-04           MY   T004  delivered
+4       C0005  Sarah Wong  user5@company.com  +60 12 5506259   67.61  01/05/2024           MY   T005    shipped
+
+  列信息:
+    customer_id: str, 非空 100/100
+    full_name: str, 非空 100/100
+    email: str, 非空 100/100
+    phone: str, 非空 100/100
+    amount: float64, 非空 95/100
+    order_date: str, 非空 100/100
+    country_code: str, 非空 100/100
+    tax_id: str, 非空 98/100
+    status: str, 非空 100/100
+
+================================================================================
+  IR-0: 列画像 (ColumnProfileIR)
+================================================================================
+  Column: customer_id
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: identifier_like
+    semantic_candidates: [{'type': 'Identifier', 'confidence': 0.99, 'evidence': ['pattern_identifier_coverage_1.0']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 1.0
+    duplicate_ratio: 0.0
+    distinct_count: 100
+    total_count: 100
+    pattern: identifier
+    avg_length: 5.0
+    max_length: 5
+    top_frequencies: {}
+    samples: ['C0084', 'C0054', 'C0001', 'C0002', 'C0100']
+    candidate_types: []
+    entropy: 6.6439
+    singleton_ratio: 1.0
+    character_entropy: 2.6642
+    structural_signature: A9999
+    pattern_fingerprints: [{'pattern_name': 'identifier', 'confidence': 0.99, 'coverage': 1.0}]
+    top_10_coverage: 0.1
+    top_20_coverage: 0.2
+    numeric_density: 0.8
+    length_std: 0.0
+    separator_profile: {}
+    decimal_place_mode: 0
+    length_entropy: 0.0
+    structural_signature_detail: {'signature': 'A9{4}', 'char_class_ratio': {'digit': 0.8, 'alpha': 0.2, 'separator': 0.0, 'other': 0.0}, 'coverage': np.float64(1.0)}
+    value_range_profile: {'min_length': 5, 'max_length': 5, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: full_name
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: free_text
+    semantic_candidates: []
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 0.63
+    duplicate_ratio: 0.37
+    distinct_count: 63
+    total_count: 100
+    avg_length: 9.24
+    max_length: 15
+    top_frequencies: {'Sarah Wong': 4, 'Bob Smith': 4, 'Bob Ng': 3, 'Michael Ng': 3, 'Jane Tan': 3}
+    samples: ['Emma Chen', 'Bob Lim', 'Sarah Wong', 'Bob Smith', 'Tom Chen']
+    candidate_types: []
+    entropy: 5.8035
+    singleton_ratio: 0.38
+    character_entropy: 4.4702
+    structural_signature: AAAA AAA
+    pattern_fingerprints: []
+    top_10_coverage: 0.32
+    top_20_coverage: 0.52
+    numeric_density: 0.0
+    length_std: 1.6
+    separator_profile: {' ': 1.0}
+    length_entropy: 2.6149
+    structural_signature_detail: {'signature': 'A{4} A{3}', 'char_class_ratio': {'digit': 0.0, 'alpha': 0.875, 'separator': 0.125, 'other': 0.0}, 'coverage': np.float64(0.15)}
+    value_range_profile: {'min_length': 6, 'max_length': 15, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: email
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: email_like
+    semantic_candidates: [{'type': 'Email', 'confidence': 0.99, 'evidence': ['pattern_email_coverage_1.0']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 1.0
+    duplicate_ratio: 0.0
+    distinct_count: 100
+    total_count: 100
+    pattern: email
+    avg_length: 17.92
+    max_length: 19
+    top_frequencies: {}
+    samples: ['user84@company.com', 'user54@company.com', 'user1@company.com', 'user2@company.com', 'user100@company.com']
+    candidate_types: []
+    entropy: 6.6439
+    singleton_ratio: 1.0
+    character_entropy: 4.0819
+    structural_signature: AAAA99@AAAAAAA.AAA
+    pattern_fingerprints: [{'pattern_name': 'email', 'confidence': 0.99, 'coverage': 1.0}]
+    top_10_coverage: 0.1
+    top_20_coverage: 0.2
+    numeric_density: 0.1069
+    length_std: 0.31
+    separator_profile: {'.': 1.0}
+    decimal_place_mode: 0
+    length_entropy: 0.5159
+    structural_signature_detail: {'signature': 'A{4}9{2}@A{7}.A{3}', 'char_class_ratio': {'digit': 0.1111, 'alpha': 0.7778, 'separator': 0.0556, 'other': 0.0556}, 'coverage': np.float64(0.9)}
+    value_range_profile: {'min_length': 17, 'max_length': 19, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: phone
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: phone_like
+    semantic_candidates: [{'type': 'Phone', 'confidence': 0.99, 'evidence': ['pattern_phone_coverage_1.0']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 1.0
+    duplicate_ratio: 0.0
+    distinct_count: 100
+    total_count: 100
+    pattern: phone
+    avg_length: 12.7
+    max_length: 14
+    top_frequencies: {}
+    samples: ['+60 12 5249913', '+60 12 4444084', '+6012 3656138', '012 2915631', '+6012 9217316']
+    candidate_types: []
+    entropy: 6.6439
+    singleton_ratio: 1.0
+    character_entropy: 3.5331
+    structural_signature: 99-99 9999999
+    pattern_fingerprints: [{'pattern_name': 'phone', 'confidence': 0.99, 'coverage': 1.0}]
+    top_10_coverage: 0.1
+    top_20_coverage: 0.2
+    numeric_density: 0.851
+    length_std: 1.0
+    separator_profile: {' ': 0.7389, '-': 0.2611}
+    decimal_place_mode: 0
+    length_entropy: 1.3457
+    structural_signature_detail: {'signature': '9{2}-9{2} 9{7}', 'char_class_ratio': {'digit': 0.8462, 'alpha': 0.0, 'separator': 0.1538, 'other': 0.0}, 'coverage': np.float64(0.41)}
+    value_range_profile: {'min_length': 11, 'max_length': 14, 'leading_zero_ratio': np.float64(0.23)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: amount
+    dataset_name: integration_test
+    storage_type: float
+    logical_type: unknown
+    semantic_candidates: []
+    data_type: float
+    null_ratio: 0.05
+    unique_ratio: 0.7474
+    duplicate_ratio: 0.2526
+    distinct_count: 71
+    total_count: 100
+    min: 25.15
+    max: 979.72
+    mean: 513.6848
+    std: 278.3285
+    percentiles: {'25%': 247.39, '50%': 572.84, '75%': 685.96}
+    avg_length: 5.8842
+    max_length: 6
+    top_frequencies: {'622.07': 5, '629.68': 4, '887.81': 3, '429.24': 3, '167.06': 3}
+    samples: [26.99, 25.15, 622.07, 629.68, 680.0]
+    candidate_types: []
+    entropy: 5.9658
+    singleton_ratio: 0.6
+    character_entropy: 3.3767
+    structural_signature: 999.99
+    pattern_fingerprints: []
+    top_10_coverage: 0.3158
+    top_20_coverage: 0.4632
+    numeric_density: 0.0
+    length_std: 0.0
+    separator_profile: {}
+    decimal_place_mode: 2
+    length_entropy: 0.5171
+    structural_signature_detail: {'signature': '9{3}.9{2}', 'char_class_ratio': {'digit': 0.8333, 'alpha': 0.0, 'separator': 0.1667, 'other': 0.0}, 'coverage': np.float64(0.8842)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: order_date
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: date_like
+    semantic_candidates: [{'type': 'Date', 'confidence': 0.6, 'evidence': ['logical_type_date_like']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 1.0
+    duplicate_ratio: 0.0
+    distinct_count: 100
+    total_count: 100
+    pattern: date
+    avg_length: 10.0
+    max_length: 10
+    top_frequencies: {}
+    samples: ['2024-03-24', '2024-02-23', '2024.01.01', '2024-01-02', '2024.04.09']
+    candidate_types: []
+    entropy: 6.6439
+    singleton_ratio: 1.0
+    character_entropy: 2.9097
+    structural_signature: 9999-99-99
+    pattern_fingerprints: [{'pattern_name': 'date', 'confidence': 0.8574169883779954, 'coverage': 0.6489999999999999}]
+    top_10_coverage: 0.1
+    top_20_coverage: 0.2
+    numeric_density: 0.8
+    length_std: 0.0
+    separator_profile: {'.': 0.13, '-': 0.61, '/': 0.26}
+    decimal_place_mode: 0
+    length_entropy: 0.0
+    structural_signature_detail: {'signature': '9{4}-9{2}-9{2}', 'char_class_ratio': {'digit': 0.8, 'alpha': 0.0, 'separator': 0.2, 'other': 0.0}, 'coverage': np.float64(0.61)}
+    value_range_profile: {'min_length': 10, 'max_length': 10, 'leading_zero_ratio': np.float64(0.19)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: country_code
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: finite_domain_like
+    semantic_candidates: [{'type': 'Finite_Domain', 'confidence': 0.8649169835779448, 'evidence': ['pattern_finite_domain_coverage_0.8713488007363582']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 0.05
+    duplicate_ratio: 0.95
+    distinct_count: 5
+    total_count: 100
+    pattern: finite_domain
+    avg_length: 2.0
+    max_length: 2
+    top_frequencies: {'MY': 53, 'SG': 25, 'PH': 9, 'TH': 8, 'ID': 5}
+    samples: ['MY', 'TH', 'SG', 'ID']
+    candidate_types: []
+    entropy: 1.8057
+    singleton_ratio: 0.0
+    character_entropy: 2.7209
+    structural_signature: AA
+    pattern_fingerprints: [{'pattern_name': 'finite_domain', 'confidence': 0.8649169835779448, 'coverage': 0.8713488007363582}]
+    top_10_coverage: 1.0
+    top_20_coverage: 1.0
+    numeric_density: 0.0
+    length_std: 0.0
+    separator_profile: {}
+    length_entropy: 0.0
+    structural_signature_detail: {'signature': 'A{2}', 'char_class_ratio': {'digit': 0.0, 'alpha': 1.0, 'separator': 0.0, 'other': 0.0}, 'coverage': np.float64(1.0)}
+    value_range_profile: {'min_length': 2, 'max_length': 2, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {'my': 53, 'sg': 25, 'ph': 9, 'th': 8, 'id': 5}
+    cluster_coverage: 1.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: tax_id
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: identifier_like
+    semantic_candidates: [{'type': 'Identifier', 'confidence': 0.99, 'evidence': ['pattern_identifier_coverage_1.0']}]
+    data_type: string
+    null_ratio: 0.02
+    unique_ratio: 1.0
+    duplicate_ratio: 0.0
+    distinct_count: 98
+    total_count: 100
+    pattern: identifier
+    avg_length: 4.0
+    max_length: 4
+    top_frequencies: {}
+    samples: ['T065', 'T043', 'T001', 'T002', 'T100']
+    candidate_types: []
+    entropy: 6.6147
+    singleton_ratio: 1.0
+    character_entropy: 2.9695
+    structural_signature: A999
+    pattern_fingerprints: [{'pattern_name': 'identifier', 'confidence': 0.99, 'coverage': 1.0}]
+    top_10_coverage: 0.102
+    top_20_coverage: 0.2041
+    numeric_density: 0.75
+    length_std: 0.0
+    separator_profile: {}
+    decimal_place_mode: 0
+    length_entropy: 0.0
+    structural_signature_detail: {'signature': 'A9{3}', 'char_class_ratio': {'digit': 0.75, 'alpha': 0.25, 'separator': 0.0, 'other': 0.0}, 'coverage': np.float64(1.0)}
+    value_range_profile: {'min_length': 4, 'max_length': 4, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {}
+    cluster_coverage: 0.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+  Column: status
+    dataset_name: integration_test
+    storage_type: string
+    logical_type: finite_domain_like
+    semantic_candidates: [{'type': 'Finite_Domain', 'confidence': 0.8583590016396435, 'evidence': ['pattern_finite_domain_coverage_0.8603453506020489']}]
+    data_type: string
+    null_ratio: 0.0
+    unique_ratio: 0.04
+    duplicate_ratio: 0.96
+    distinct_count: 4
+    total_count: 100
+    pattern: finite_domain
+    avg_length: 8.14
+    max_length: 9
+    top_frequencies: {'delivered': 53, 'shipped': 31, 'pending': 12, 'cancelled': 4}
+    samples: ['shipped', 'delivered', 'cancelled']
+    candidate_types: []
+    entropy: 1.5621
+    singleton_ratio: 0.0
+    character_entropy: 3.1483
+    structural_signature: AAAAAAAAA
+    pattern_fingerprints: [{'pattern_name': 'finite_domain', 'confidence': 0.8583590016396435, 'coverage': 0.8603453506020489}]
+    top_10_coverage: 1.0
+    top_20_coverage: 1.0
+    numeric_density: 0.0
+    length_std: 1.0
+    separator_profile: {}
+    length_entropy: 0.9858
+    structural_signature_detail: {'signature': 'A{9}', 'char_class_ratio': {'digit': 0.0, 'alpha': 1.0, 'separator': 0.0, 'other': 0.0}, 'coverage': np.float64(0.57)}
+    value_range_profile: {'min_length': 7, 'max_length': 9, 'leading_zero_ratio': np.float64(0.0)}
+    value_similarity_clusters: {'delivered': 53, 'shipped': 31, 'pending': 12, 'cancelled': 4}
+    cluster_coverage: 1.0
+    duckling_summary: {}
+    presidio_summary: {}
+
+
+================================================================================
+  IR-1: 证据图 (EvidenceGraph)
+================================================================================
+  节点数: 9
+  边数: 16
+
+--- 节点 (GraphNode) ---
+  Node: customer_id
+    storage_type: string
+    logical_type: identifier_like
+    unique_ratio: 1.0
+    null_ratio: 0.0
+    entropy: 6.6439
+    numeric_density: 0.8
+    length_std: 0.0
+    separator_profile: {}
+    pattern: identifier
+    candidate_types: []
+    pk_score: 0.9
+    has_id_pattern: True
+
+  Node: full_name
+    storage_type: string
+    logical_type: free_text
+    unique_ratio: 0.63
+    null_ratio: 0.0
+    entropy: 5.8035
+    numeric_density: 0.0
+    length_std: 1.6
+    separator_profile: {' ': 1.0}
+    pattern: None
+    candidate_types: []
+    pk_score: 0.6155
+    has_id_pattern: False
+
+  Node: email
+    storage_type: string
+    logical_type: email_like
+    unique_ratio: 1.0
+    null_ratio: 0.0
+    entropy: 6.6439
+    numeric_density: 0.1069
+    length_std: 0.31
+    separator_profile: {'.': 1.0}
+    pattern: email
+    candidate_types: []
+    pk_score: 0.67
+    has_id_pattern: False
+
+  Node: phone
+    storage_type: string
+    logical_type: phone_like
+    unique_ratio: 1.0
+    null_ratio: 0.0
+    entropy: 6.6439
+    numeric_density: 0.851
+    length_std: 1.0
+    separator_profile: {' ': 0.7389, '-': 0.2611}
+    pattern: phone
+    candidate_types: []
+    pk_score: 0.67
+    has_id_pattern: False
+
+  Node: amount
+    storage_type: float
+    logical_type: unknown
+    unique_ratio: 0.7474
+    null_ratio: 0.05
+    entropy: 5.9658
+    numeric_density: 0.0
+    length_std: 0.0
+    separator_profile: {}
+    pattern: None
+    candidate_types: []
+    pk_score: 0.6026
+    has_id_pattern: False
+
+  Node: order_date
+    storage_type: string
+    logical_type: date_like
+    unique_ratio: 1.0
+    null_ratio: 0.0
+    entropy: 6.6439
+    numeric_density: 0.8
+    length_std: 0.0
+    separator_profile: {'.': 0.13, '-': 0.61, '/': 0.26}
+    pattern: date
+    candidate_types: []
+    pk_score: 0.67
+    has_id_pattern: False
+
+  Node: country_code
+    storage_type: string
+    logical_type: finite_domain_like
+    unique_ratio: 0.05
+    null_ratio: 0.0
+    entropy: 1.8057
+    numeric_density: 0.0
+    length_std: 0.0
+    separator_profile: {}
+    pattern: finite_domain
+    candidate_types: []
+    pk_score: 0.5675
+    has_id_pattern: True
+
+  Node: tax_id
+    storage_type: string
+    logical_type: identifier_like
+    unique_ratio: 1.0
+    null_ratio: 0.02
+    entropy: 6.6147
+    numeric_density: 0.75
+    length_std: 0.0
+    separator_profile: {}
+    pattern: identifier
+    candidate_types: []
+    pk_score: 0.896
+    has_id_pattern: True
+
+  Node: status
+    storage_type: string
+    logical_type: finite_domain_like
+    unique_ratio: 0.04
+    null_ratio: 0.0
+    entropy: 1.5621
+    numeric_density: 0.0
+    length_std: 1.0
+    separator_profile: {}
+    pattern: finite_domain
+    candidate_types: []
+    pk_score: 0.334
+    has_id_pattern: False
+
+
+--- 边 (GraphEdge) ---
+  customer_id --[functional_dependency]--> tax_id  (权重: 0.5560)
+      name_similarity: 0.4192
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 0.98
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.9801
+      logical_type_match: 1.0
+      semantic_overlap: 0.9801
+      statistical_vector_similarity: 0.7641
+
+  country_code --[similar_to]--> status  (权重: 0.4333)
+      name_similarity: 0.3333
+      embedding_similarity: 0.0
+      partition_similarity: 0.53
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.7424
+      logical_type_match: 1.0
+      semantic_overlap: 0.7424
+      statistical_vector_similarity: 0.7078
+
+  customer_id --[functional_dependency]--> order_date  (权重: 0.3220)
+      name_similarity: 0.6515
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.591
+
+  phone --[functional_dependency]--> order_date  (权重: 0.3181)
+      name_similarity: 0.5333
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.6111
+
+  email --[functional_dependency]--> tax_id  (权重: 0.3174)
+      name_similarity: 0.5778
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 0.98
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5697
+
+  customer_id --[functional_dependency]--> phone  (权重: 0.3167)
+      name_similarity: 0.5273
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5836
+
+  customer_id --[functional_dependency]--> full_name  (权重: 0.3138)
+      name_similarity: 0.5194
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5189
+
+  customer_id --[functional_dependency]--> country_code  (权重: 0.3138)
+      name_similarity: 0.673
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3646
+
+  email --[functional_dependency]--> order_date  (权重: 0.3134)
+      name_similarity: 0.4333
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5951
+
+  customer_id --[functional_dependency]--> email  (权重: 0.3125)
+      name_similarity: 0.4303
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5755
+
+  order_date --[functional_dependency]--> country_code  (权重: 0.3099)
+      name_similarity: 0.5889
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3506
+
+  order_date --[functional_dependency]--> tax_id  (权重: 0.3085)
+      name_similarity: 0.3444
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 0.98
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.5821
+
+  tax_id --[functional_dependency]--> status  (权重: 0.3084)
+      name_similarity: 0.5556
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 0.98
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3671
+
+  phone --[functional_dependency]--> country_code  (权重: 0.3071)
+      name_similarity: 0.5222
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3476
+
+  customer_id --[functional_dependency]--> status  (权重: 0.3065)
+      name_similarity: 0.4798
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3754
+
+  email --[functional_dependency]--> status  (权重: 0.3051)
+      name_similarity: 0.4556
+      embedding_similarity: 0.0
+      partition_similarity: 1.0
+      value_overlap: 0.0
+      inclusion_degree: 0.0
+      distribution_similarity: 0.3069
+      null_pattern_similarity: 1.0
+      datatype_compatibility: 1.0
+      co_occurrence_score: 0.5
+      cluster_overlap: 0.0
+      morphology_similarity: 0.0
+      logical_type_match: 0.0
+      semantic_overlap: 0.0
+      statistical_vector_similarity: 0.3642
+
+================================================================================
+测试完成（无断言，仅输出）
+================================================================================
+
+PASSED

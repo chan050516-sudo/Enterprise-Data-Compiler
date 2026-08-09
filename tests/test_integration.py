@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 from pprint import pprint
 from unittest.mock import patch
-from app.legacy.technical_normalizer import TechnicalNormalizer
+
+from app.normalizer.technical_normalizer import TechnicalNormalizer
 from app.profiler.semantic_profiler import SemanticProfiler
 from app.evidence.builder import EvidenceGraphBuilder
 
@@ -75,7 +76,6 @@ def realistic_df():
 def print_ir0(profile):
     """打印单个 ColumnProfileIR 的所有非 None 字段"""
     data = profile.model_dump(exclude_none=True, exclude={'_value_set'})
-    # 重命名某些字段使输出更清晰
     print(f"  Column: {data.get('column_name')}")
     for key, value in data.items():
         if key == 'column_name':
@@ -90,7 +90,6 @@ def print_ir1_node(node):
     """打印 GraphNode 的关键属性"""
     print(f"  Node: {node.column_name}")
     props = node.properties
-    # 只显示感兴趣的特征
     key_fields = [
         'storage_type', 'logical_type', 'unique_ratio', 'null_ratio',
         'entropy', 'numeric_density', 'length_std', 'separator_profile',
@@ -109,7 +108,6 @@ def print_ir1_edge(edge):
     """打印单条边及其证据详情"""
     ev = edge.evidence
     print(f"  {edge.source_column} --[{edge.edge_type.value}]--> {edge.target_column}  (权重: {edge.weight:.4f})")
-    # 打印所有非 None 证据
     ev_dict = ev.model_dump(exclude_none=True)
     if ev_dict:
         for k, v in ev_dict.items():
@@ -136,10 +134,9 @@ def test_end_to_end_integration(realistic_df, capsys):
             print(f"    {col}: {realistic_df[col].dtype}, 非空 {realistic_df[col].count()}/{len(realistic_df)}")
 
         # ---- Phase 0.5: Normalization ----
+        # 当前 TechnicalNormalizer 只做确定性清洗（Unicode + 空白），
+        # 不再负责日期/电话/货币的语义级标准化（这些已下沉到 normalizers.py）
         normalizer = TechnicalNormalizer(config={
-            "phone_country_code": "MY",
-            "normalize_dates": True,
-            "normalize_currency": True,
             "normalize_whitespace": True,
             "normalize_unicode": True,
         })
@@ -147,15 +144,18 @@ def test_end_to_end_integration(realistic_df, capsys):
 
         # ---- Phase 1: Profiling（禁用 embedding 避免下载模型） ----
         with patch('app.profiler.semantic_profiler.SemanticProfiler._generate_name_embedding', return_value=None):
-            profiler = SemanticProfiler()
-            profiles = profiler.generate_column_profiles(df_clean, dataset_name="integration_test")
+            # generate_column_profiles 是类方法
+            profiles = SemanticProfiler.generate_column_profiles(
+                df_clean,
+                dataset_name="integration_test"
+            )
 
             # ---- Phase 2: Evidence Graph ----
-            builder = EvidenceGraphBuilder()
-            graph = builder.build(
+            # build 是类方法
+            graph = EvidenceGraphBuilder.build(
                 profiles=profiles,
                 df=df_clean,
-                enable_blocking=False,
+                enable_blocking=False,  # 测试时关闭分块，便于观察所有候选对
             )
 
         # ============================================================

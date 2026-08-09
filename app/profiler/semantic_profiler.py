@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple, Set
 from app.profiler.profile_ir import ColumnProfileIR, PatternFingerprint, SemanticCandidate, EntitySummary
 from app.profiler.detectors import DetectorRegistry, DetectionResult
+from app.profiler.evidence_fusion import EvidenceFusionEngine
 
 try:
     from pandas_type_detector import TypeDetectionPipeline
@@ -183,27 +184,21 @@ class SemanticProfiler:
             # ----- 2. 统计特征 -----
             stats = cls._compute_basic_stats(valid_series, total_count)
 
-            # ----- 3. 模式指纹（先做，供 logical_type 使用） -----
-            pattern_fingerprints = cls._detect_pattern_fingerprints(valid_series)
-
-            # ----- 4. 逻辑类型（传入 pattern_fingerprints 避免重复正则） -----
-            logical_type = cls._infer_logical_type(valid_series, stats, pattern_fingerprints)
-
-            # ----- 5. 结构签名 -----
+            # ----- 3. 结构签名 -----
             structural_signature_simple = cls._compute_structural_signature(valid_series)
             structural_signature_detail = cls._compute_structural_signature_detail(valid_series)
 
-            # ----- 6. 熵 -----
+            # ----- 4. 熵 -----
             value_entropy = cls._compute_entropy(valid_series)
             character_entropy = cls._compute_character_entropy(valid_series)
             length_entropy = cls._compute_length_entropy(valid_series)
 
-            # ----- 7. 分布特征 -----
+            # ----- 5. 分布特征 -----
             top_freq, top_10_cov, top_20_cov, singleton_ratio = cls._compute_distribution_features(
                 valid_series
             )
 
-            # ----- 8. 形态学特征 -----
+            # ----- 6. 形态学特征 -----
             morph_features = {}
             if storage_type == "string" and valid_count > 0:
                 morph_features = cls._extract_morphological_features(valid_series)
@@ -233,6 +228,21 @@ class SemanticProfiler:
             value_range_profile = None
             if storage_type == "string" and valid_count > 0:
                 value_range_profile = cls._compute_value_range_profile(valid_series)
+
+            precomputed_stats = {
+                "pattern_coverage": structural_signature_detail.get("coverage") if structural_signature_detail else 0.0,
+                "length_std": morph_features.get("length_std", 0.0),
+                "separator_profile": morph_features.get("separator_profile", {}),
+            }
+
+            # ---- 7. 模式指纹（供 logical_type 使用, 也调用检测器，传入预计算数据） ----
+            pattern_fingerprints = cls._detect_pattern_fingerprints(
+                valid_series,
+                precomputed_stats=precomputed_stats
+            )
+
+            # ----- 8. 逻辑类型（传入 pattern_fingerprints 避免重复正则） -----
+            logical_type = cls._infer_logical_type(valid_series, stats, pattern_fingerprints)
 
             # ----- 9. 值相似度聚类（独立） -----
             value_similarity_clusters, cluster_coverage = cls._compute_value_similarity_clusters(valid_series)
@@ -431,23 +441,24 @@ class SemanticProfiler:
         return "unknown"
 
     @classmethod
-    def _detect_pattern_fingerprints(cls, valid_series: pd.Series) -> List[PatternFingerprint]:
+    def _detect_pattern_fingerprints(cls, valid_series: pd.Series, precomputed_stats: Optional[Dict[str, Any]] = None) -> List[PatternFingerprint]:
         """
-        检测所有模式（使用新的 DetectorRegistry）
+        检测所有模式（使用新的 DetectorRegistry + EvidenceFusionEngine）
         """
         if len(valid_series) == 0:
             return []
 
         registry = DetectorRegistry()
-        result = registry.detect_all(valid_series)
+        raw_result = registry.detect_all(valid_series, precomputed_stats=precomputed_stats)
+        fused_result = EvidenceFusionEngine.fuse(raw_result)
         
         fingerprints = []
-        for candidate in result.candidates:
-            if candidate.confidence > 0.3:  # 只保留置信度 > 0.3 的候选
+        for candidate in fused_result.candidates:
+            if candidate.confidence > 0.3:
                 fingerprints.append(PatternFingerprint(
                     pattern_name=candidate.type,
                     confidence=candidate.confidence,
-                    coverage=candidate.confidence  # 用置信度近似覆盖率
+                    coverage=candidate.raw_score  # 使用 raw_score 作为 coverage
                 ))
         
         # 按置信度降序排序
