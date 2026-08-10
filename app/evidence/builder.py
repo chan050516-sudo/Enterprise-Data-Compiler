@@ -346,8 +346,7 @@ class EvidenceCalculator:
         jaccard, containment_a_to_b, containment_b_to_a, cardinality = \
             EvidenceCalculator._compute_value_overlap(col_value_sets, col_a, col_b)
         
-        # FD 置信度
-        fd_conf = EvidenceCalculator._compute_fd_confidence(df[col_a], df[col_b])
+        fd_strength, fd_violation = EvidenceCalculator._compute_fd_evidence(df[col_a], df[col_b])
         
         # 空值模式
         null_pattern_sim = EvidenceCalculator._compute_null_pattern_similarity(df[col_a], df[col_b])
@@ -382,7 +381,8 @@ class EvidenceCalculator:
             value_overlap=round(jaccard, 4),
             cardinality=cardinality,
             co_occurrence_score=round(co_occurrence, 4),
-            partition_similarity=round(fd_conf, 4),
+            approximate_fd_strength=fd_strength,
+            fd_violation_ratio=fd_violation,
             inclusion_degree=round(max(containment_a_to_b, containment_b_to_a), 4),
             null_pattern_similarity=round(null_pattern_sim, 4),
             distribution_similarity=round(dist_sim, 4),
@@ -481,21 +481,33 @@ class EvidenceCalculator:
         return jaccard, containment_a_to_b, containment_b_to_a, cardinality
     
     @staticmethod
-    def _compute_fd_confidence(col_a: pd.Series, col_b: pd.Series) -> float:
+    def _compute_fd_evidence(col_a: pd.Series, col_b: pd.Series) -> Tuple[float, float]:
+        """
+        计算近似 FD 强度及违反比例。
+        返回 (fd_strength, violation_ratio)
+        """
         valid_mask = col_a.notna() & col_b.notna()
         if valid_mask.sum() == 0:
-            return 0.0
+            return 0.0, 1.0
+        
         a = col_a[valid_mask]
         b = col_b[valid_mask]
         try:
             df_temp = pd.DataFrame({'a': a, 'b': b})
-            correct_count = df_temp.groupby('a')['b'].agg(
+            group_sizes = df_temp.groupby('a').size()
+            max_freq_per_group = df_temp.groupby('a')['b'].agg(
                 lambda x: x.value_counts().max() if len(x) > 0 else 0
-            ).sum()
-            total = len(a)
-            return round(correct_count / total if total > 0 else 0.0, 4)
+            )
+            weighted_sum = (max_freq_per_group * group_sizes).sum()
+            total = group_sizes.sum()
+            fd_strength = weighted_sum / total if total > 0 else 0.0
+            
+            violation_mask = df_temp.groupby('a')['b'].transform('nunique') > 1
+            violation_ratio = violation_mask.sum() / len(df_temp) if len(df_temp) > 0 else 0.0
+            
+            return round(fd_strength, 4), round(violation_ratio, 4)
         except Exception:
-            return 0.0
+            return 0.0, 1.0
     
     @staticmethod
     def _compute_null_pattern_similarity(col_a: pd.Series, col_b: pd.Series) -> float:
@@ -664,7 +676,7 @@ class WeightedFusionEngine:
     
     # 证据权重配置
     WEIGHTS = {
-        "fd_confidence": 0.18,
+        "approximate_fd_strength": 0.18,
         "inclusion": 0.14,
         "value_jaccard": 0.08,
         "name_similarity": 0.04,
@@ -686,7 +698,7 @@ class WeightedFusionEngine:
             return 0.0
         
         weighted_score = (
-            cls.WEIGHTS["fd_confidence"] * (evidence.partition_similarity or 0.0) +
+            cls.WEIGHTS["approximate_fd_strength"] * (evidence.approximate_fd_strength or 0.0) +
             cls.WEIGHTS["inclusion"] * (evidence.inclusion_degree or 0.0) +
             cls.WEIGHTS["value_jaccard"] * (evidence.value_overlap or 0.0) +
             cls.WEIGHTS["name_similarity"] * (evidence.name_similarity or 0.0) +
@@ -723,7 +735,7 @@ class EdgeTypeDecider:
         semantic_overlap = evidence.semantic_overlap or 0.0
         morphology_sim = evidence.morphology_similarity or 0.0
         
-        if evidence.partition_similarity and evidence.partition_similarity > fd_threshold:
+        if evidence.approximate_fd_strength and evidence.approximate_fd_strength > fd_threshold:
             candidate_edges.append(EdgeType.FUNCTIONAL_DEPENDENCY)
         
         if containment_a_to_b > inclusion_threshold:

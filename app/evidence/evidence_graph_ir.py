@@ -18,7 +18,14 @@ class EvidenceDetail(BaseModel):
     embedding_similarity: Optional[float] = None         # 词向量/LLM嵌入相似度
     
     # ---------- 结构层面 ----------
-    partition_similarity: Optional[float] = None         # 等价类分区一致性（FD强度）
+    approximate_fd_strength: Optional[float] = Field(
+        default=None,
+        description="近似函数依赖强度 (0~1)，基于分组最大频次占比的加权平均"
+    )
+    fd_violation_ratio: Optional[float] = Field(
+        default=None,
+        description="违反严格 FD 的行数占比 (0~1)，值越小说明数据越干净"
+    )
     value_overlap: Optional[float] = None                # 值集合重叠率 (Jaccard)
     inclusion_degree: Optional[float] = None             # 包含依赖度 (IND, 用于FK)
     distribution_similarity: Optional[float] = None      # 分布相似度 (KL/KS/分位数)
@@ -107,8 +114,8 @@ class EvidenceGraph(BaseModel):
         lines.append("\n### High-Confidence Relationships (weight > 0.8):")
         for edge in sorted(self.edges, key=lambda x: -x.weight)[:top_k]:
             detail = []
-            if edge.evidence.partition_similarity is not None:
-                detail.append(f"partition={edge.evidence.partition_similarity:.2f}")
+            if edge.evidence.approximate_fd_strength is not None:
+                detail.append(f"fd_strength={edge.evidence.approximate_fd_strength:.2f}")
             if edge.evidence.inclusion_degree is not None:
                 detail.append(f"inclusion={edge.evidence.inclusion_degree:.2f}")
             if edge.evidence.value_overlap is not None:
