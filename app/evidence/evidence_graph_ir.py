@@ -26,6 +26,22 @@ class EvidenceDetail(BaseModel):
         default=None,
         description="违反严格 FD 的行数占比 (0~1)，值越小说明数据越干净"
     )
+    reverse_fd_strength: Optional[float] = Field(
+        default=None,
+        description="反向近似 FD 强度 (B→A)，用于判断 1:1 或 identifier-attribute 关系"
+    )
+    min_group_purity: Optional[float] = Field(
+        default=None,
+        description="最差分组纯度（每组内 B 的最大频次占比的最小值），用于识别异常分组"
+    )
+    superkey_error: Optional[float] = Field(
+        default=None,
+        description="超键错误率 e(A)，使该列成为超键需要移除的元组比例"
+    )
+    null_handling: Optional[str] = Field(
+        default="ignore_nulls",
+        description="NULL 处理策略: 'ignore_nulls' 或 'treat_as_value'"
+    )
     value_overlap: Optional[float] = None                # 值集合重叠率 (Jaccard)
     inclusion_degree: Optional[float] = None             # 包含依赖度 (IND, 用于FK)
     distribution_similarity: Optional[float] = None      # 分布相似度 (KL/KS/分位数)

@@ -268,6 +268,11 @@ class CandidateGenerator:
             all_pairs = set(candidate_pairs) | set(lsh_candidates)
             candidate_pairs = list(all_pairs)
             logger.info(f"  - LSH contributed {len(lsh_candidates)} additional pairs, total: {len(candidate_pairs)}")
+
+        # ===== 第三路：预剪枝（减少无效计算） =====
+        if len(candidate_pairs) > 1000:
+            candidate_pairs = CandidateGenerator._apply_pruning(candidate_pairs, profiles)
+            logger.info(f"  - After pruning: {len(candidate_pairs)} pairs remain")
         
         return candidate_pairs
 
@@ -277,7 +282,17 @@ class CandidateGenerator:
         threshold: float = 0.5, # 可调
         num_perm: int = 128
     ) -> List[Tuple[str, str]]:
-        """使用 MinHash LSH 生成候选对"""
+        """
+        使用 MinHash LSH 生成候选对（值域重叠召回）
+
+        定位说明：
+        本方法基于值的 Jaccard 相似度进行近似召回，适用于发现值域重叠的列对
+        （如 customer_id 在两个表中语义相同）。
+        不适用于发现纯粹的 FD 关系（如 customer_id → customer_name），
+        因为这类列对的值 Jaccard 通常接近 0。
+        FD 关系的召回由行为分块（Blocking）+ 锚点采样（Anchor Sampling）承担。
+        """
+
         if not HAS_DATASKETCH:
             return []
         
@@ -324,6 +339,39 @@ class CandidateGenerator:
             buckets[bucket_key].append(node.column_name)
         return {k: v for k, v in buckets.items() if len(v) > 1}
 
+    @staticmethod
+    def _apply_pruning(
+        pairs: List[Tuple[str, str]], 
+        profiles: List[ColumnProfileIR]
+    ) -> List[Tuple[str, str]]:
+        """使用列级统计特征预剪枝候选对"""
+        # 构建快速查找字典
+        profile_map = {p.column_name: p for p in profiles}
+        
+        pruned = []
+        for a, b in pairs:
+            pa = profile_map.get(a)
+            pb = profile_map.get(b)
+            if pa is None or pb is None:
+                pruned.append((a, b))
+                continue
+            
+            # 剪枝规则1：如果 A 的基数远大于 B 的基数（>10倍），A→B 几乎不可能成立
+            if pa.distinct_count > pb.distinct_count * 10:
+                continue
+            
+            # 剪枝规则2：如果两列都是高唯一率（>0.95）且长度差异很大，不太可能有强关系
+            if pa.unique_ratio > 0.95 and pb.unique_ratio > 0.95:
+                if pa.avg_length is not None and pb.avg_length is not None:
+                    if abs(pa.avg_length - pb.avg_length) > 20:
+                        continue
+            
+            # 剪枝规则3：如果两列的存储类型完全不兼容（string vs numeric），保留但权重会低
+            # 保留对，但可记录优先级信息
+            pruned.append((a, b))
+        
+        return pruned
+
 
 class EvidenceCalculator:
     """多维度证据计算器"""
@@ -346,7 +394,9 @@ class EvidenceCalculator:
         jaccard, containment_a_to_b, containment_b_to_a, cardinality = \
             EvidenceCalculator._compute_value_overlap(col_value_sets, col_a, col_b)
         
-        fd_strength, fd_violation = EvidenceCalculator._compute_fd_evidence(df[col_a], df[col_b])
+        fd_strength, fd_violation, reverse_fd, min_purity = EvidenceCalculator._compute_fd_evidence(
+            df[col_a], df[col_b]
+        )
         
         # 空值模式
         null_pattern_sim = EvidenceCalculator._compute_null_pattern_similarity(df[col_a], df[col_b])
@@ -383,6 +433,10 @@ class EvidenceCalculator:
             co_occurrence_score=round(co_occurrence, 4),
             approximate_fd_strength=fd_strength,
             fd_violation_ratio=fd_violation,
+            reverse_fd_strength=reverse_fd,
+            min_group_purity=min_purity,
+            superkey_error=1.0 - profile_a.unique_ratio,
+            null_handling="ignore_nulls",
             inclusion_degree=round(max(containment_a_to_b, containment_b_to_a), 4),
             null_pattern_similarity=round(null_pattern_sim, 4),
             distribution_similarity=round(dist_sim, 4),
@@ -452,7 +506,7 @@ class EvidenceCalculator:
             structural_match = 1.0
         
         # 取最大值
-        return max(pattern_match, format_sim, structural_match)
+        return max(pattern_match, structural_match)
     
     @staticmethod
     def _compute_value_overlap(
@@ -481,33 +535,65 @@ class EvidenceCalculator:
         return jaccard, containment_a_to_b, containment_b_to_a, cardinality
     
     @staticmethod
-    def _compute_fd_evidence(col_a: pd.Series, col_b: pd.Series) -> Tuple[float, float]:
+    def _compute_fd_evidence(
+        col_a: pd.Series, 
+        col_b: pd.Series,
+        treat_null_as_value: bool = False
+    ) -> Tuple[float, float, float, float]:
         """
-        计算近似 FD 强度及违反比例。
-        返回 (fd_strength, violation_ratio)
+        计算近似 FD 证据（含反向 FD 和分组纯度）
+
+        Args:
+            col_a: 源列
+            col_b: 目标列
+            treat_null_as_value: 是否将 NULL 视为独立值
+
+        Returns:
+            (fd_strength, violation_ratio, reverse_fd_strength, min_group_purity)
         """
-        valid_mask = col_a.notna() & col_b.notna()
-        if valid_mask.sum() == 0:
-            return 0.0, 1.0
-        
-        a = col_a[valid_mask]
-        b = col_b[valid_mask]
-        try:
-            df_temp = pd.DataFrame({'a': a, 'b': b})
-            group_sizes = df_temp.groupby('a').size()
-            max_freq_per_group = df_temp.groupby('a')['b'].agg(
-                lambda x: x.value_counts().max() if len(x) > 0 else 0
-            )
-            weighted_sum = (max_freq_per_group * group_sizes).sum()
-            total = group_sizes.sum()
-            fd_strength = weighted_sum / total if total > 0 else 0.0
-            
-            violation_mask = df_temp.groupby('a')['b'].transform('nunique') > 1
-            violation_ratio = violation_mask.sum() / len(df_temp) if len(df_temp) > 0 else 0.0
-            
-            return round(fd_strength, 4), round(violation_ratio, 4)
-        except Exception:
-            return 0.0, 1.0
+        # ---- 处理 NULL ----
+        if treat_null_as_value:
+            a_filled = col_a.fillna('__NULL__')
+            b_filled = col_b.fillna('__NULL__')
+        else:
+            valid_mask = col_a.notna() & col_b.notna()
+            if valid_mask.sum() == 0:
+                return 0.0, 1.0, 0.0, 0.0
+            a_filled = col_a[valid_mask]
+            b_filled = col_b[valid_mask]
+
+        # ---- 计算 A→B ----
+        df_temp = pd.DataFrame({'a': a_filled, 'b': b_filled})
+        group_sizes = df_temp.groupby('a').size()
+        max_freq_per_group = df_temp.groupby('a')['b'].agg(
+            lambda x: x.value_counts().max() if len(x) > 0 else 0
+        )
+        weighted_sum = (max_freq_per_group * group_sizes).sum()
+        total = group_sizes.sum()
+        fd_strength = weighted_sum / total if total > 0 else 0.0
+
+        violation_mask = df_temp.groupby('a')['b'].transform('nunique') > 1
+        violation_ratio = violation_mask.sum() / len(df_temp) if len(df_temp) > 0 else 0.0
+
+        # 计算最差分组纯度（purity = 最大频次 / 组大小）
+        group_purity = max_freq_per_group / group_sizes
+        min_group_purity = group_purity.min() if len(group_purity) > 0 else 0.0
+
+        # ---- 计算反向 FD (B→A) ----
+        reverse_group_sizes = df_temp.groupby('b').size()
+        reverse_max_freq = df_temp.groupby('b')['a'].agg(
+            lambda x: x.value_counts().max() if len(x) > 0 else 0
+        )
+        reverse_weighted_sum = (reverse_max_freq * reverse_group_sizes).sum()
+        reverse_total = reverse_group_sizes.sum()
+        reverse_fd_strength = reverse_weighted_sum / reverse_total if reverse_total > 0 else 0.0
+
+        return (
+            round(fd_strength, 4),
+            round(violation_ratio, 4),
+            round(reverse_fd_strength, 4),
+            round(min_group_purity, 4)
+        )
     
     @staticmethod
     def _compute_null_pattern_similarity(col_a: pd.Series, col_b: pd.Series) -> float:
@@ -676,7 +762,8 @@ class WeightedFusionEngine:
     
     # 证据权重配置
     WEIGHTS = {
-        "approximate_fd_strength": 0.18,
+        "approximate_fd_strength": 0.14,
+        "fd_violation_ratio": 0.04,
         "inclusion": 0.14,
         "value_jaccard": 0.08,
         "name_similarity": 0.04,
@@ -696,9 +783,12 @@ class WeightedFusionEngine:
         """融合多维度证据，计算综合权重"""
         if evidence is None:
             return 0.0
+
+        violation_score = 1.0 - (evidence.fd_violation_ratio or 0.0)
         
         weighted_score = (
             cls.WEIGHTS["approximate_fd_strength"] * (evidence.approximate_fd_strength or 0.0) +
+            cls.WEIGHTS["fd_violation_ratio"] * violation_score +
             cls.WEIGHTS["inclusion"] * (evidence.inclusion_degree or 0.0) +
             cls.WEIGHTS["value_jaccard"] * (evidence.value_overlap or 0.0) +
             cls.WEIGHTS["name_similarity"] * (evidence.name_similarity or 0.0) +
@@ -722,6 +812,8 @@ class EdgeTypeDecider:
     def decide(
         evidence: EvidenceDetail, 
         weight: float,
+        profile_a: ColumnProfileIR,
+        profile_b: ColumnProfileIR,
         fd_threshold: float = 0.8,
         inclusion_threshold: float = 0.9
     ) -> List[EdgeType]:
@@ -740,7 +832,25 @@ class EdgeTypeDecider:
         
         if containment_a_to_b > inclusion_threshold:
             candidate_edges.append(EdgeType.POSSIBLE_FK)
-        
+
+        # 新增：FD + Inclusion 组合增强
+        # 即使 Inclusion 未达到 0.9，如果 FD 很强且 Inclusion 也不低，也值得标记
+        fd_high = evidence.approximate_fd_strength and evidence.approximate_fd_strength > fd_threshold
+        inclusion_moderate = containment_a_to_b > 0.7
+        if fd_high and inclusion_moderate:
+            if EdgeType.POSSIBLE_FK not in candidate_edges:
+                candidate_edges.append(EdgeType.POSSIBLE_FK)
+
+        reverse_high = evidence.reverse_fd_strength and evidence.reverse_fd_strength > 0.9
+        both_high_uniqueness = profile_a.unique_ratio > 0.95 and profile_b.unique_ratio > 0.95
+
+        if fd_high and reverse_high and both_high_uniqueness:
+            # key-induced: 不标记为 FUNCTIONAL_DEPENDENCY，可以标记为 WEAK_FD 或直接跳过
+            # 或者标记为 SIMILAR_TO（因为两者都是唯一标识符）
+            pass
+        elif fd_high:
+            candidate_edges.append(EdgeType.FUNCTIONAL_DEPENDENCY)
+
         if not candidate_edges:
             if (jaccard > 0.5 or name_sim > 0.7 or logical_match > 0.5 or 
                 semantic_overlap > 0.5 or embedding_sim > 0.7 or morphology_sim > 0.7):
@@ -761,7 +871,7 @@ class EvidenceGraphBuilder:
         df: pd.DataFrame,
         name_sim_threshold: float = 0.6,
         overlap_threshold: float = 0.3,
-        partition_threshold: float = 0.8,
+        fd_threshold: float = 0.8,
         inclusion_threshold: float = 0.9,
         max_sample_for_overlap: int = 5000,
         use_sampling: bool = True,
@@ -807,7 +917,7 @@ class EvidenceGraphBuilder:
                 continue
             
             # 决定边类型
-            edge_types = EdgeTypeDecider.decide(evidence, weight, partition_threshold, inclusion_threshold)
+            edge_types = EdgeTypeDecider.decide(evidence, weight, fd_threshold, profile_a, profile_b, inclusion_threshold)
             
             if edge_types:
                 for edge_type in edge_types:
