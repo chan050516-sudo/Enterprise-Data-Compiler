@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Set, Optional
 from app.evidence.evidence_graph_ir import EvidenceGraph, EdgeType
-from app.schema.hypothesis_ir import HypothesisPool, HypothesisType, Hypothesis
+from app.reasoning.hypothesis_ir import HypothesisPool, HypothesisType, Hypothesis
 from app.schema.constraint import ConstraintViolation, ConstraintType
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class ConstraintEngine:
         violations = []
         
         # 1. PK 唯一性检查
-        violations.extend(cls._check_pk_uniqueness(pool))
+        violations.extend(cls._check_pk_uniqueness(pool, graph))
         
         # 2. FD 一致性检查
         violations.extend(cls._check_fd_consistency(pool, graph))
@@ -40,14 +40,24 @@ class ConstraintEngine:
         return violations
     
     @classmethod
-    def _check_pk_uniqueness(cls, pool: HypothesisPool) -> List[ConstraintViolation]:
+    def _check_pk_uniqueness(cls, pool: HypothesisPool, graph: EvidenceGraph) -> List[ConstraintViolation]:
         violations = []
+        # 构建列名 → pk_score 映射
+        pk_score_map = {node.column_name: node.properties.get("pk_score", 0) for node in graph.nodes}
+
         for entity in pool.get_active_entities():
             if entity.type != HypothesisType.ENTITY:
                 continue
             columns = entity.content.get("columns", [])
+            if not columns:
+                continue
+
+            # 按 pk_score 排序
+            scored_columns = [(c, pk_score_map.get(c, 0)) for c in columns]
+            scored_columns.sort(key=lambda x: -x[1])
             
-            pk_candidates = [c for c in columns if cls._is_pk_candidate(c)]
+            # 找出高分列（> 0.7）作为 PK 候选
+            pk_candidates = [c for c, score in scored_columns if score > 0.7]
             
             if len(pk_candidates) > 1:
                 violations.append(ConstraintViolation(
@@ -60,14 +70,14 @@ class ConstraintEngine:
                     description=f"Entity {entity.id} has {len(pk_candidates)} PK candidates"
                 ))
             elif len(pk_candidates) == 0:
-                # 没有候选 PK，尝试从列中推断
-                if columns:
-                    best_pk = max(columns, key=lambda c: cls._pk_score(c))
+                if scored_columns:
+                    best_pk = scored_columns[0][0]
+                    best_score = scored_columns[0][1]
                     violations.append(ConstraintViolation(
                         constraint=ConstraintType.PK_UNIQUENESS,
                         severity=0.4,
                         expected="At least one PK candidate",
-                        actual=f"No clear PK candidate, suggested: {best_pk}",
+                        actual=f"No clear PK candidate, suggested: {best_pk} (score={best_score:.2f})",
                         affected_hypotheses=[entity.id],
                         affected_columns=columns,
                         description=f"Entity {entity.id} has no clear PK candidate"
@@ -107,23 +117,32 @@ class ConstraintEngine:
             columns = set(entity.content.get("columns", []))
             if len(columns) < 3:
                 continue
-            
-            internal_edges = 0
+
             total_possible = len(columns) * (len(columns) - 1) / 2
+            if total_possible == 0:
+                continue
+
+            # 计算内部边的总权重和数量
+            internal_weight_sum = 0.0
+            internal_edge_count = 0
             for edge in graph.edges:
                 if edge.source_column in columns and edge.target_column in columns:
-                    internal_edges += 1
-            
-            density = internal_edges / total_possible if total_possible > 0 else 0
-            if density < 0.2:
+                    internal_weight_sum += edge.weight
+                    internal_edge_count += 1
+
+            # 加权密度（归一化到 0-1）
+            weighted_density = internal_weight_sum / total_possible if total_possible > 0 else 0
+            unweighted_density = internal_edge_count / total_possible if total_possible > 0 else 0
+
+            if weighted_density < 0.2:
                 violations.append(ConstraintViolation(
                     constraint=ConstraintType.ENTITY_COHESION,
                     severity=0.5,
-                    expected=f"Entity internal density > 0.2",
-                    actual=f"density={density:.2f}",
+                    expected=f"Entity internal weighted density > 0.2",
+                    actual=f"weighted_density={weighted_density:.2f}, unweighted_density={unweighted_density:.2f}",
                     affected_hypotheses=[entity.id],
                     affected_columns=list(columns),
-                    description=f"Entity {entity.id} has low internal cohesion"
+                    description=f"Entity {entity.id} has low internal cohesion (weighted density={weighted_density:.2f})"
                 ))
         return violations
     

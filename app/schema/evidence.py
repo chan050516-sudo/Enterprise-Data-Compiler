@@ -18,6 +18,17 @@ class EvidenceType(str, Enum):
     SEMANTIC_INTERPRETATION = "semantic_interpretation"  # 新增：LLM 语义证据
     DERIVED = "derived"
 
+    PHONE = "phone"
+    EMAIL = "email"
+    DATE = "date"
+    CURRENCY = "currency"
+    BOOLEAN = "boolean"
+    BINARY_ENUM = "binary_enum"
+    FINITE_DOMAIN = "finite_domain"
+    UUID = "uuid"
+    URL = "url"
+    IDENTIFIER = "identifier"
+
 
 class EvidenceScope(str, Enum):
     """证据的作用范围"""

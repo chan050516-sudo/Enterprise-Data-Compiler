@@ -15,7 +15,7 @@ import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-from app.schema.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisType, HypothesisStatus
+from app.reasoning.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisType, HypothesisStatus
 from app.profiler.profile_ir import ColumnProfileIR
 from app.schema.semantic_evidence import SemanticInterpretation, SemanticCandidate
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope

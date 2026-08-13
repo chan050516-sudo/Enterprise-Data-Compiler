@@ -17,7 +17,7 @@ import math
 import logging
 from typing import List, Dict, Optional, Any
 from app.schema.evidence import Evidence, EvidenceType
-from app.schema.hypothesis_ir import Hypothesis
+from app.reasoning.hypothesis_ir import Hypothesis
 
 logger = logging.getLogger(__name__)
 

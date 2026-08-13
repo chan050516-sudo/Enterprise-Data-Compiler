@@ -3,7 +3,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope
-from app.schema.hypothesis_ir import Hypothesis, HypothesisType
+from app.reasoning.hypothesis_ir import Hypothesis, HypothesisType
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,27 @@ class RuleBasedLikelihoodProvider(LikelihoodProvider):
         
         # 默认（弱证据）
         ("default", "default"): 0.50,
+
+        ("phone", "entity"): 0.80,
+        ("phone", "default"): 0.40,
+        ("email", "entity"): 0.85,
+        ("email", "default"): 0.45,
+        ("date", "entity"): 0.90,
+        ("date", "default"): 0.50,
+        ("identifier", "entity"): 0.88,
+        ("identifier", "default"): 0.48,
+        ("finite_domain", "entity"): 0.60,
+        ("finite_domain", "default"): 0.30,
+        ("uuid", "entity"): 0.85,
+        ("uuid", "default"): 0.45,
+        ("url", "entity"): 0.70,
+        ("url", "default"): 0.35,
+        ("currency", "entity"): 0.65,
+        ("currency", "default"): 0.35,
+        ("boolean", "entity"): 0.55,
+        ("boolean", "default"): 0.25,
+        ("binary_enum", "entity"): 0.50,
+        ("binary_enum", "default"): 0.20,
     }
     
     def likelihood(self, evidence: Evidence, hypothesis: Hypothesis) -> float:
@@ -110,7 +131,28 @@ class RuleBasedLikelihoodProvider(LikelihoodProvider):
             if severity > 0.6:
                 return ("constraint", "violation")
             return ("constraint", "satisfied")
-        
+
+        if evidence.type == EvidenceType.PHONE:
+            return ("phone", "entity") if hypothesis.type == HypothesisType.ENTITY else ("phone", "default")
+        if evidence.type == EvidenceType.EMAIL:
+            return ("email", "entity") if hypothesis.type == HypothesisType.ENTITY else ("email", "default")
+        if evidence.type == EvidenceType.DATE:
+            return ("date", "entity") if hypothesis.type == HypothesisType.ENTITY else ("date", "default")
+        if evidence.type == EvidenceType.IDENTIFIER:
+            return ("identifier", "entity") if hypothesis.type == HypothesisType.ENTITY else ("identifier", "default")
+        if evidence.type == EvidenceType.FINITE_DOMAIN:
+            return ("finite_domain", "entity") if hypothesis.type == HypothesisType.ENTITY else ("finite_domain", "default")
+        if evidence.type == EvidenceType.UUID:
+            return ("uuid", "entity") if hypothesis.type == HypothesisType.ENTITY else ("uuid", "default")
+        if evidence.type == EvidenceType.URL:
+            return ("url", "entity") if hypothesis.type == HypothesisType.ENTITY else ("url", "default")
+        if evidence.type == EvidenceType.CURRENCY:
+            return ("currency", "entity") if hypothesis.type == HypothesisType.ENTITY else ("currency", "default")
+        if evidence.type == EvidenceType.BOOLEAN:
+            return ("boolean", "entity") if hypothesis.type == HypothesisType.ENTITY else ("boolean", "default")
+        if evidence.type == EvidenceType.BINARY_ENUM:
+            return ("binary_enum", "entity") if hypothesis.type == HypothesisType.ENTITY else ("binary_enum", "default")
+
         return ("default", "default")
 
 

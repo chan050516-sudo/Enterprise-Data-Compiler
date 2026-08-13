@@ -9,7 +9,7 @@ Semantic Interpreter Prompt Builder
 
 import json
 from typing import Dict, Any, List, Optional
-from app.schema.hypothesis_ir import Hypothesis
+from app.reasoning.hypothesis_ir import Hypothesis
 from app.profiler.profile_ir import ColumnProfileIR
 
 

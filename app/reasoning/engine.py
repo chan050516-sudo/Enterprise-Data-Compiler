@@ -4,7 +4,7 @@ import uuid
 from typing import List, Dict, Set, Optional, Any
 from app.evidence.evidence_graph_ir import EvidenceGraph, EdgeType
 from app.schema.evidence import Evidence, EvidenceType, EvidenceScope
-from app.schema.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisStatus, HypothesisType
+from app.reasoning.hypothesis_ir import HypothesisPool, Hypothesis, HypothesisStatus, HypothesisType
 from app.schema.resolution import ResolutionPlan, ResolutionLoop, ResolutionStatus, ResolutionOperatorType
 from app.reasoning.evidence_fusion import EvidenceFusion
 from app.schema.constraint import ConstraintViolation
@@ -428,6 +428,8 @@ class ReasoningEngine:
         evidence_list = []
         
         for edge in graph.edges:
+            evd = edge.evidence
+
             if edge.edge_type == EdgeType.FUNCTIONAL_DEPENDENCY:
                 # FD 影响源列和目标列所在的所有实体
                 evidence_list.append(Evidence(
@@ -436,7 +438,14 @@ class ReasoningEngine:
                     source=f"{edge.source_column}->{edge.target_column}",
                     scope=EvidenceScope.ENTITY,
                     target_hypotheses=[],  # 运行时由 Entity Finder 填充
-                    data={"source": edge.source_column, "target": edge.target_column},
+                    data={
+                        "source": edge.source_column,
+                        "target": edge.target_column,
+                        "fd_strength": evd.approximate_fd_strength,
+                        "reverse_fd": evd.reverse_fd_strength,
+                        "violation_ratio": evd.fd_violation_ratio,
+                        "min_purity": evd.min_group_purity,
+                    },
                     raw_value=edge.weight,
                     normalized_value=edge.weight
                 ))
@@ -448,7 +457,12 @@ class ReasoningEngine:
                     source=f"{edge.source_column}->{edge.target_column}",
                     scope=EvidenceScope.RELATIONSHIP,
                     target_hypotheses=[edge.source_column, edge.target_column],
-                    data={"source": edge.source_column, "target": edge.target_column},
+                    data={
+                        "source": edge.source_column,
+                        "target": edge.target_column,
+                        "inclusion": evd.inclusion_degree,
+                        "fd_strength": evd.approximate_fd_strength,
+                    },
                     raw_value=edge.weight,
                     normalized_value=edge.weight
                 ))
@@ -460,7 +474,13 @@ class ReasoningEngine:
                     source=f"{edge.source_column}->{edge.target_column}",
                     scope=EvidenceScope.ENTITY,
                     target_hypotheses=[],
-                    data={"source": edge.source_column, "target": edge.target_column},
+                    data={
+                        "source": edge.source_column,
+                        "target": edge.target_column,
+                        "name_sim": evd.name_similarity,
+                        "embedding_sim": evd.embedding_similarity,
+                        "morphology_sim": evd.morphology_similarity,
+                    },
                     raw_value=edge.weight,
                     normalized_value=edge.weight
                 ))
@@ -478,6 +498,33 @@ class ReasoningEngine:
                 raw_value=pk_score,
                 normalized_value=pk_score
             ))
+
+            type_mapping = {
+                "phone": EvidenceType.PHONE,
+                "email": EvidenceType.EMAIL,
+                "date": EvidenceType.DATE,
+                "identifier": EvidenceType.IDENTIFIER,
+                "uuid": EvidenceType.UUID,
+                "url": EvidenceType.URL,
+                "finite_domain": EvidenceType.FINITE_DOMAIN,
+                "currency": EvidenceType.CURRENCY,
+                "boolean": EvidenceType.BOOLEAN,
+                "binary_enum": EvidenceType.BINARY_ENUM,
+            }
+            for fp in node.properties.get("pattern_fingerprints", []):
+                pattern_name = fp.get("pattern_name")
+                ev_type = type_mapping.get(pattern_name)
+                if ev_type:
+                    evidence_list.append(Evidence(
+                        id=f"EVID-{pattern_name.upper()}-{node.column_name}",
+                        type=ev_type,
+                        source=node.column_name,
+                        scope=EvidenceScope.COLUMN,
+                        target_hypotheses=[node.column_name],
+                        data={"column": node.column_name, "fingerprint": fp},
+                        raw_value=fp.get("coverage", 0.0),
+                        normalized_value=fp.get("confidence", 0.0)
+                    ))
         
         return evidence_list
     
@@ -836,9 +883,21 @@ class ReasoningEngine:
         """Louvain 社区检测"""
         try:
             import networkx as nx
-            from networkx.algorithms.community import louvain_communities
+            try:
+                from networkx.algorithms.community import louvain_communities
+            except ImportError:
+                try:
+                    from networkx.algorithms.community.louvain import louvain_communities
+                except ImportError:
+                    import community as community_louvain
+                    def louvain_communities(G, weight='weight', seed=42):
+                        partition = community_louvain.best_partition(G, random_state=seed)
+                        communities = {}
+                        for node, comm_id in partition.items():
+                            communities.setdefault(comm_id, []).append(node)
+                        return list(communities.values())
         except ImportError:
-            logger.warning("networkx not installed, using fallback clustering")
+            logger.warning("networkx/community not installed, using fallback clustering")
             return self._fallback_clustering(graph)
         
         G = nx.Graph()
