@@ -618,3 +618,775 @@ Date: 2/8/2026
 10. **失败隔离**：细胞级错误矩阵构建、人工复核 Payload 生成。
 
 这就是这个“AI 数据编译器”从读取到交付，面对脏数据时完整的、确定性的、可审计的工业化处理全貌。
+
+
+
+
+
+
+
+# 自主企业数据编译器（EDC）系统架构全景
+
+**文档版本**：v2.0  
+**更新日期**：2026-08-13  
+**覆盖范围**：Phase 0.5 至 Phase 2（技术标准化 → 证据图构建）
+
+---
+
+## 一、系统定位与核心使命
+
+本系统是一个**自主企业数据编译器（Autonomous Enterprise Data Compiler）**，专为 ERP 迁移、数据湖集成等场景设计。其核心使命是：
+
+> **将任意杂乱无章的源数据（如 POS 销售表、Excel 导出），全自动地编译为符合目标 ERP（如 SAP、Oracle）严苛业务契约的干净数据，并安全地交付给业务系统。**
+
+与传统的 ETL 工具不同，本系统采用 **“证据驱动（Evidence-Driven）”** 的架构范式——不依赖硬编码的映射规则，而是通过多维度统计学检测和概率推理，自主发现数据的结构、语义和关系。
+
+---
+
+## 二、整体分层架构（Phase 0.5 ~ Phase 2）
+
+系统采用 **“控制平面（Control Plane）与执行平面（Execution Plane）分离”** 的企业级架构。当前文档聚焦于 **Phase 0.5 至 Phase 2**（数据接入 → 证据图构建），这是整个编译管道的“感知层”（Sensing Layer），负责将原始数据转化为结构化的、可推理的证据。
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LAYER 9: 宏观编排 (Wave Orchestrator)                │
+│                    (多业务对象依赖拓扑排序 + 级联熔断)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LAYER 8: 物理交付 (SQLite Writer / CSV Exporter)     │
+│                       (幂等写入 + Saga 逆向冲销补偿)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     LAYER 7: 业务对账 (Reconciliation Engine)                │
+│          (日期漂移容忍、复式记账配平、递归汇总校验)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  LAYER 6: 确定性编译 (IRCompiler) + 信任评估                  │
+│     (Operator Registry 向量化执行 Pandas + ODCS 契约引擎)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LAYER 5: 控制平面 (Governor + SpecRepo)                   │
+│          (MappingSpec 状态机: DRAFT -> LOCKED -> ARCHIVED)                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   LAYER 4: 映射规划 (Mapping Planner + LLM)                  │
+│             (生成包含推理链的 AdvancedTransformationIR)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           LAYER 3: 推理引擎 (Reasoning Engine + 语义解释器)                   │
+│     (证据图 → 贝叶斯假设池 → LLM 语义消歧 → Resolution Loop)                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     LAYER 2: 证据图构建 (Evidence Graph)                     │
+│      (列画像 → 行为指纹分块 → FD/FK/相似度确定性计算)                          │
+│                     产出: EvidenceGraph (IR-1)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               LAYER 1: 语义画像 (Semantic Profiler / IR-0)                   │
+│    (统计特征 + 模式指纹检测 + 语义候选 + 列名嵌入)                             │
+│              产出: List[ColumnProfileIR]                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               LAYER 0.5: 技术标准化 (Technical Normalizer)                   │
+│          (确定性清洗: Unicode NFKC、空白压缩、控制字符移除)                     │
+│                 产出: 清洗后 DataFrame + NormalizationReport                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       LAYER 0: 数据源连接器 (CSV Connector)                  │
+│                       产出: pandas DataFrame                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 三、Phase 0.5：技术标准化（Technical Normalizer）
+
+### 3.1 定位与设计哲学
+
+Phase 0.5 是系统的“第一道防线”，负责**确定性清洗（Deterministic Cleaning）**。其核心设计原则是：
+
+> **只做无损、可复现的格式统一，不做任何类型检测或条件决策。**
+
+这意味着：
+- 所有操作都是**确定性的**（同样的输入总是产生同样的输出）。
+- 不依赖数据内容做“智能判断”（如“这个看起来像日期，我要不要转？”）。
+- 不改变数据的业务含义（只改变表示形式）。
+
+### 3.2 输入
+
+| 项目 | 说明 |
+| :--- | :--- |
+| **数据** | `pd.DataFrame`（由 CSVConnector 读取） |
+| **配置** | `TechnicalNormalizer.config`（来自 `settings.py`） |
+
+配置项包括：
+```python
+{
+    "normalize_whitespace": True,   # 空白字符压缩
+    "normalize_unicode": True,      # Unicode NFKC 规范化
+}
+```
+
+### 3.3 处理流程（逐列）
+
+```text
+for each column in df:
+    ├── 1. 数值列：仅处理 inf → NaN
+    ├── 2. 非字符串列：跳过（保留原样）
+    └── 3. 字符串列：
+        ├── 3a. 空值预处理：替换常见空值表示 → pd.NA
+        ├── 3b. 转为字符串（保留缺失值）
+        ├── 3c. Unicode 规范化（NFKC）
+        ├── 3d. 空白字符处理（strip + 压缩多空格）
+        ├── 3e. 控制字符移除（[\r\n\t\x00-\x1f\x7f] → 空格）
+        └── 3f. 空值再次统一 → pd.NA
+```
+
+### 3.4 输出
+
+| 输出项 | 说明 |
+| :--- | :--- |
+| **清洗后 DataFrame** | 所有字符串列已清洗，空值统一为 `pd.NA` |
+| **NormalizationReport** | 每列的清洗审计报告（含样本前后对比） |
+
+### 3.5 与后续层级的边界
+
+**重要**：Phase 0.5 **不负责**语义级标准化（如日期格式转换、电话国家码添加、货币符号提取）。这些操作由 Phase 6（执行平面）中的 `normalizers.py` 在映射执行时按需调用。这样做的原因是：
+- 语义级标准化需要**知道目标字段的类型**（如目标要求 `YYYY-MM-DD` 还是 `DD/MM/YYYY`），而这在 Phase 0.5 时尚未确定。
+- Phase 0.5 只做**数据质量层面**的清洗，不做**业务语义层面**的转换。
+
+---
+
+## 四、Phase 1：语义画像（Semantic Profiler / IR-0）
+
+### 4.1 定位与设计哲学
+
+Phase 1 是系统的“感知层”，负责从清洗后的数据中提取**多维度的列级指纹（Column-level Fingerprints）**。其核心设计原则是：
+
+> **通过统计学和确定性算法，生成可复现、可审计的列画像，不依赖 LLM 或模糊推理。**
+
+关键转变（相对于旧版）：
+- **检测器（Detector）体系重构**：每个检测器只负责“产出证据”，不负责“做出分类决策”。
+- **证据融合（Evidence Fusion）**：多个检测器的证据通过 `EvidenceFusionEngine` 消解冲突，输出最终的语义候选。
+- **LLM 调用下沉**：LLM 仅在 Phase 4（语义解释）中调用，Phase 1 保持纯统计学。
+
+### 4.2 输入
+
+| 项目 | 说明 |
+| :--- | :--- |
+| **数据** | 清洗后的 `pd.DataFrame` |
+| **参数** | `dataset_name`、`max_sample_rows`（默认 10000） |
+
+### 4.3 核心产出：`ColumnProfileIR`
+
+每列的完整画像包含以下维度：
+
+#### 4.3.1 基础元数据
+```python
+column_name: str          # 列名
+dataset_name: str         # 数据集名称
+storage_type: str         # 'integer' | 'float' | 'boolean' | 'string' | 'datetime'
+logical_type: str         # 'fixed_length_code' | 'free_text' | 'enum_like' | ...
+```
+
+#### 4.3.2 基础统计
+| 字段 | 说明 |
+| :--- | :--- |
+| `null_ratio` | 空值率 |
+| `unique_ratio` | 唯一率（非空值中唯一值的比例） |
+| `distinct_count` | 唯一值数量 |
+| `entropy` | 信息熵（基于值分布） |
+| `singleton_ratio` | 单例率（只出现一次的值占总行数的比例） |
+
+#### 4.3.3 数值型特有
+| 字段 | 说明 |
+| :--- | :--- |
+| `min` / `max` | 最小/最大值 |
+| `mean` / `std` | 均值/标准差 |
+| `percentiles` | 25%/50%/75% 分位数 |
+
+#### 4.3.4 文本型特有
+| 字段 | 说明 |
+| :--- | :--- |
+| `avg_length` / `max_length` | 平均/最大长度 |
+| `numeric_density` | 数字密度（数字字符占比） |
+| `length_std` | 长度标准差 |
+| `separator_profile` | 分隔符分布（`{'-': 0.6, '/': 0.3, '.': 0.1}`） |
+
+#### 4.3.5 模式指纹（`pattern_fingerprints`）
+由 `DetectorRegistry` 统一产生，每个指纹包含：
+```python
+PatternFingerprint(
+    pattern_name: str,   # 'email' | 'phone' | 'date' | 'uuid' | 'identifier' | ...
+    confidence: float,   # 0-1
+    coverage: float      # 匹配该模式的行数占比
+)
+```
+
+#### 4.3.6 语义候选（`semantic_candidates`）
+```python
+SemanticCandidate(
+    type: str,           # 'Email' | 'Phone' | 'Date' | 'CustomerID' | ...
+    confidence: float,
+    evidence: List[str]  # 支持此候选的证据链
+)
+```
+
+#### 4.3.7 列名嵌入（`name_embedding`）
+使用 `SentenceTransformer('all-MiniLM-L6-v2')` 生成的 384 维向量，供 Phase 2 做语义相似度计算。
+
+### 4.4 检测器体系（Detector Registry）
+
+所有检测器继承 `BaseDetector`，统一通过 `DetectorRegistry` 调度。
+
+| 检测器 | 检测类型 | 核心方法 |
+| :--- | :--- | :--- |
+| **PhoneDetector** | 电话号码 | `phonenumbers` 库验证 + 国家码自动发现 |
+| **EmailDetector** | 邮箱地址 | 正则预检 + `email_validator` 验证 |
+| **DateDetector** | 日期（严格模式）| 16 种标准格式 `strptime` 匹配，无 `dateutil` 模糊解析 |
+| **CurrencyDetector** | 货币金额 | 符号检测 + `price_parser` 解析 |
+| **BooleanDetector** | 布尔值/二值枚举 | 标准布尔匹配 + 二值枚举检测 |
+| **FiniteDomainDetector** | 有限值域（枚举）| 单例率 + Top-K 覆盖率 + 域稳定性 |
+| **UUIDDetector** | UUID/GUID | 正则匹配 |
+| **IdentifierDetector** | 实体标识符 | 结构覆盖率 + 唯一性 + 长度一致性 + 前缀一致性 |
+| **URLDetector** | URL | 正则预检 + `validators.url()` 验证 |
+
+#### 4.4.1 DateDetector（重点说明）
+
+重构后的 `DateDetector` 采用**严格格式匹配**策略：
+
+```text
+对于每个值：
+    ├── 1. 词法预检：拦截无意义长字母串（如 "Invoice2024"）
+    ├── 2. 硬编码格式枚举（16 种高频格式）：
+    │      "%Y-%m-%d", "%d/%m/%Y", "%Y.%m.%d", "%Y%m%d",
+    │      "%d-%b-%Y", "%b %d %Y", ...
+    └── 3. 匹配成功 → 返回 (True, fmt, 1.0)
+        匹配失败 → 返回 (False, None, 0.0)
+```
+
+**关键设计决策**：
+- **彻底移除 `dateutil`**：因为 `dateutil.parser.parse` 会将 `"T001"` 解析为 `2001-01-01`，造成虚假的日期证据。
+- **列级聚合**：单个值匹配成功不意味着整列是日期。`detect()` 方法计算 `coverage`（覆盖率）和 `format_consistency`（格式一致性），只有当两者都足够高时才产出 `date` 证据。
+- **辅助证据**：消费 Layer 1 预计算的 `pattern_coverage`、`length_std`、`separator_profile` 作为辅助信号。
+
+#### 4.4.2 IdentifierDetector（重点说明）
+
+重构后的 `IdentifierDetector` 不再试图“判断这是不是 ID”，而是检测列是否具有**实体标识符的结构特征**：
+
+```text
+Layer 1: Shape Evidence（结构证据）
+    ├── 字母+数字（带或不带分隔符）：PATTERN_LETTER_DIGITS
+    └── 纯数字（长度 ≥ 5）：PATTERN_PURE_DIGITS
+    → shape_coverage = 匹配该结构的行数占比
+
+Layer 2: Column Statistical Evidence（列统计证据）
+    ├── uniqueness（唯一性，实体标识符必须高唯一）
+    ├── length_consistency（长度一致性）
+    ├── prefix_consistency（前缀一致性）
+    └── suffix_numeric_ratio（数字后缀比例）
+
+Layer 3: Semantic Context（弱语义 Bonus）
+    └── 列名含 'id'/'code'/'no'/'key' → +0.10
+        列名含 'name'/'desc'/'type' → -0.10
+```
+
+**不产出 contradictions**：`IdentifierDetector` 内部不产生跨类型矛盾（如“这是 ID 而不是 Date”），矛盾裁决由 `EvidenceFusionEngine` 统一处理。
+
+#### 4.4.3 FiniteDomainDetector（枚举检测器）
+
+检测列是否表现出“来自有限、重复、稳定值域”的统计特征：
+
+```text
+核心指标：
+    ├── singleton_ratio = 单例值数量 / 唯一值总数（低 → 更像枚举）
+    ├── top_k_mass = Top-K 值覆盖率（高 → 更像枚举）
+    └── core_score = (1 - singleton_ratio) * 0.5 + top_k_mass * 0.5
+
+辅助指标：
+    ├── normalized_entropy（归一化熵，低 → 更像枚举）
+    └── domain_stability（跨批次 Jaccard，高 → 更像枚举）
+```
+
+**重要**：`FiniteDomainDetector` 不输出 `enum` 类型，而是输出 `finite_domain` 证据。语义类型（如 `status`、`country`）由上层推理引擎结合列名等上下文推断。
+
+### 4.5 证据融合引擎（Evidence Fusion Engine）
+
+多个检测器可能对同一列产生**冲突的证据**（如 `DateDetector` 产出 `date`，`IdentifierDetector` 产出 `identifier`）。`EvidenceFusionEngine` 负责消解这些冲突：
+
+```text
+EXCLUSIVE_GROUPS = [
+    ('phone', 'date'),
+    ('phone', 'email'),
+    ('date', 'email'),
+    ('boolean', 'binary_enum'),
+    ('uuid', 'identifier'),
+    ('url', 'identifier'),
+    ('url', 'uuid'),
+    ('date', 'identifier'),
+]
+
+TYPE_PRIORITY = {
+    'date': 10,
+    'email': 9,
+    'phone': 8,
+    'uuid': 7,
+    'identifier': 6,
+    'currency': 5,
+    'boolean': 4,
+    'binary_enum': 3,
+}
+```
+
+融合流程：
+1. 对每个互斥组，如果存在多个候选，保留置信度最高的，其余乘以 0.5 系数降低。
+2. 按类型去重（保留置信度最高的）。
+3. 按优先级 + 置信度排序。
+
+### 4.6 输出
+
+| 输出项 | 说明 |
+| :--- | :--- |
+| **`List[ColumnProfileIR]`** | 每列的完整画像 |
+| **`pattern_fingerprints`** | 每个检测器产出的模式指纹（已融合） |
+| **`semantic_candidates`** | 语义候选列表（带置信度和证据链） |
+| **`name_embedding`** | 列名的语义向量（384 维） |
+
+---
+
+## 五、Phase 2：证据图构建（Evidence Graph Builder / IR-1）
+
+### 5.1 定位与设计哲学
+
+Phase 2 是系统的“关系发现层”，负责**在列与列之间建立多维度证据边（Evidence Edges）**。其核心设计原则是：
+
+> **不做出任何“最终判断”（如“这是外键”），只产出可解释的、带证据链的关系分数。**
+
+证据图的构建分为四个阶段：
+1. **节点构建（NodeBuilder）**：每列 → `GraphNode`（含 `pk_score`、行为指纹等）
+2. **候选对生成（CandidateGenerator）**：筛选“可能有关联”的列对（避免 O(n²)）
+3. **证据计算（EvidenceCalculator）**：对每个候选对计算 13+ 维度证据
+4. **边类型决策（EdgeTypeDecider）**：基于证据权重决定边的类型
+
+### 5.2 输入
+
+| 项目 | 说明 |
+| :--- | :--- |
+| **`List[ColumnProfileIR]`** | Phase 1 产出的列画像列表 |
+| **`pd.DataFrame`** | 原始数据（用于值级计算） |
+
+### 5.3 节点构建（NodeBuilder）
+
+每列被封装为一个 `GraphNode`，包含以下核心属性：
+
+#### 5.3.1 `pk_score`（主键候选评分）
+
+```python
+score = (
+    0.35 * unique_ratio +          # 唯一性（核心）
+    0.20 * (1 - null_ratio) +      # 非空率
+    0.25 * semantic_score +        # 列名含 id/code/no/key
+    0.10 * datatype_score +        # 数值型/短标识符
+    0.10 * monotonicity_score      # 单调性（数值列）
+)
+```
+
+#### 5.3.2 `behavior_fingerprint`（行为指纹）
+
+用于候选对生成中的**行为分块（Blocking）**：
+
+```python
+{
+    "change_rate": float,        # 相邻行变化率
+    "avg_run_length": float,     # 平均游程长度
+    "cardinality_ratio": float,  # 前 100 行基数比
+    "entropy": float,            # 信息熵
+    "null_ratio": float,         # 空值率
+    "hex_signature": str         # 变化模式的十六进制签名
+}
+```
+
+### 5.4 候选对生成（CandidateGenerator）
+
+避免全量 O(n²) 比较的核心优化：
+
+#### 5.4.1 第一路：行为分块（Behavior Blocking）
+
+```text
+根据 behavior_fingerprint 将列分入不同的桶：
+    change_bucket = int(change_rate * 10)
+    entropy_bucket = int(entropy / 2)
+    cardinality_bucket = int(cardinality_ratio * 5)
+    bucket_key = f"b{change_bucket}_e{entropy_bucket}_c{cardinality_bucket}"
+
+只比较桶内的列（同一桶的列行为模式相似）
+```
+
+#### 5.4.2 锚点采样（Anchor Sampling）
+
+选取 `pk_score` 最高的 5% 列作为锚点，强制与所有列比较：
+- 防止高质量的跨类型关系（如 ID → Name）被分块遗漏。
+
+#### 5.4.3 第二路：LSH 近似搜索（MinHash LSH）
+
+基于值集合的 Jaccard 相似度进行近似召回：
+- 适用于发现值域重叠的列对（如两个表中的 `customer_id`）。
+- **不适用于发现纯粹的 FD 关系**（如 `customer_id → customer_name`，值 Jaccard ≈ 0）。
+- FD 关系的召回由行为分块 + 锚点采样承担。
+
+#### 5.4.4 第三路：预剪枝（Pre-pruning）
+
+对候选对进行快速过滤，减少无效计算：
+
+```text
+剪枝规则1：如果 A 的基数 > B 的基数 * 10，A→B 几乎不可能成立
+剪枝规则2：如果两列都是高唯一率（>0.95）且长度差异 > 20，不太可能有强关系
+剪枝规则3：存储类型完全不兼容（string vs numeric）保留但权重会低
+```
+
+### 5.5 证据计算（EvidenceCalculator）
+
+对每个候选对 `(col_a, col_b)` 计算 **13+ 个维度的证据**：
+
+#### 5.5.1 语义层面
+
+| 证据 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| **`name_similarity`** | `jaro_winkler` / `difflib` | 列名编辑距离相似度 |
+| **`embedding_similarity`** | 余弦相似度 | 列名语义向量（384 维）相似度 |
+
+#### 5.5.2 结构层面
+
+| 证据 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| **`approximate_fd_strength`** | 分组最大频次占比的加权平均 | A→B 的近似 FD 强度 |
+| **`fd_violation_ratio`** | 违反严格 FD 的行数占比 | 值越小说明数据越干净 |
+| **`reverse_fd_strength`** | 同上（方向 B→A） | 用于判断 1:1 或 identifier-attribute |
+| **`min_group_purity`** | 最差分组的纯度 | 识别异常分组 |
+| **`superkey_error`** | `1 - unique_ratio` | 使该列成为超键需移除的元组比例 |
+| **`value_overlap`** | Jaccard 相似度 | 值集合重叠率 |
+| **`inclusion_degree`** | 包含依赖度 | A 的值集合有多少比例包含在 B 中 |
+| **`distribution_similarity`** | JS 散度 / 分位数 MSE | 值分布相似度 |
+| **`null_pattern_similarity`** | 空值对齐度 | 同时为空/非空的行数占比 |
+
+#### 5.5.3 元数据层面
+
+| 证据 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| **`cardinality`** | 值集合大小比较 | `one_to_one` / `one_to_many` / `many_to_one` |
+| **`datatype_compatibility`** | 类型匹配 | 同类型=1.0，int↔float=0.8，string↔numeric=0.1 |
+| **`co_occurrence_score`** | 同表/同数据集 | 同一表=0.6，同一数据集=0.3 |
+
+#### 5.5.4 聚类与形态学层面
+
+| 证据 | 方法 | 说明 |
+| :--- | :--- | :--- |
+| **`cluster_overlap`** | 枚举簇重叠度 | 值相似度聚类簇的交集大小 |
+| **`logical_type_match`** | 逻辑类型匹配 | 相同逻辑类型=1.0，否则=0.0 |
+| **`semantic_overlap`** | 语义候选重叠 | 加权 Jaccard |
+| **`statistical_vector_similarity`** | `ColumnSemanticVector` | 统计指纹向量相似度 |
+| **`morphology_similarity`** | 形态学匹配 | pattern_match / structural_signature_match 的最大值 |
+
+### 5.6 证据融合（WeightedFusionEngine）
+
+将所有证据维度加权融合为**综合权重 `weight`**：
+
+```python
+WEIGHTS = {
+    "approximate_fd_strength": 0.14,
+    "fd_violation_ratio": 0.04,      # 违反比例越低越好
+    "inclusion": 0.14,
+    "value_jaccard": 0.08,
+    "name_similarity": 0.04,
+    "embedding_similarity": 0.08,
+    "datatype_compatibility": 0.04,
+    "distribution": 0.04,
+    "null_pattern": 0.04,
+    "cluster_overlap": 0.08,
+    "logical_type_match": 0.10,
+    "semantic_overlap": 0.08,
+    "statistical_vector_similarity": 0.04,
+    "morphology_similarity": 0.06,
+}
+```
+
+**关键设计**：`fd_violation_ratio` 以 `1 - violation` 的形式参与融合（违反比例越低，得分越高）。
+
+### 5.7 边类型决策（EdgeTypeDecider）
+
+基于综合权重和关键阈值，决定边的类型：
+
+```text
+如果 approximate_fd_strength > 0.8:
+    → EdgeType.FUNCTIONAL_DEPENDENCY
+
+如果 inclusion_degree > 0.9:
+    → EdgeType.POSSIBLE_FK
+
+如果 FD 强度 > 0.85 且 Inclusion > 0.7（组合增强）:
+    → EdgeType.POSSIBLE_FK（即使未达到 0.9）
+
+如果 key-induced（双向 FD 都高且两列都高唯一率）:
+    → 跳过 FUNCTIONAL_DEPENDENCY（不标记）
+
+否则，如果任一相似度指标超过阈值:
+    → EdgeType.SIMILAR_TO
+
+否则，如果 weight > 0.4:
+    → EdgeType.CO_OCCURS_WITH（兜底）
+```
+
+### 5.8 输出
+
+| 输出项 | 说明 |
+| :--- | :--- |
+| **`EvidenceGraph`** | 包含 `nodes`（GraphNode 列表）和 `edges`（GraphEdge 列表） |
+| **`GraphNode`** | 列节点（含 `pk_score`、行为指纹、`ColumnSemanticVector`） |
+| **`GraphEdge`** | 边（含 `edge_type`、`weight`、`EvidenceDetail`） |
+
+### 5.9 关键设计决策总结
+
+| 决策 | 原因 |
+| :--- | :--- |
+| **FD 不输出布尔值，输出强度分数** | 企业数据有噪声，近似 FD 更有价值 |
+| **计算反向 FD（`reverse_fd_strength`）** | 区分“属性依赖”和“双向标识符” |
+| **`min_group_purity` 追踪最差分组** | 识别“整体强但局部脏”的 FD |
+| **`fd_violation_ratio` 加入融合** | 区分“高 FD 强度但高违反”和“高 FD 强度且低违反” |
+| **key-induced FD 跳过标记** | `email → customer_id` 是替代键，不是属性依赖 |
+| **`POSSIBLE_FK` 由 FD+Inclusion 组合增强** | 即使 Inclusion 未达 0.9，FD 强 + Inclusion 中等也值得标记 |
+| **行为分块 + LSH + 预剪枝** | 将 O(n²) 降至 O(n log n)，支持 100+ 列 |
+
+---
+
+## 六、核心数据流（Phase 0.5 → Phase 2）
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         原始 CSV 文件                                       │
+│  Row │ CUST_ID │ FULL_NAME  │ ENTRY_DT   │ AMOUNT   │ REGION_ID          │
+│  0   │ C001    │ " John "   │ 2023-01-15 │ "$100"   │ R1                 │
+│  1   │ C002    │ "Jane"     │ 01/20/2023 │ "200"    │ R2                 │
+│  2   │ C003    │ "Bob"      │ 2023.02.01 │ "$300.5" │ R1                 │
+│  3   │ C004    │ "Tech"     │ 23-03-10   │ "400"    │ R3                 │
+│  4   │ C005    │ "Acme"     │ 2023/04/05 │ "500"    │ R999               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Phase 0.5: Technical Normalizer                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ • Unicode NFKC 规范化                                              │  │
+│  │ • 空白字符压缩（strip + 压缩多空格）                                │  │
+│  │ • 控制字符移除                                                     │  │
+│  │ • 空值统一 → pd.NA                                                │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  输出: 清洗后 DataFrame + NormalizationReport                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ CUST_ID │ FULL_NAME │ ENTRY_DT   │ AMOUNT │ REGION_ID             │  │
+│  │ C001    │ John      │ 2023-01-15 │ 100.0  │ R1                    │  │
+│  │ C002    │ Jane      │ 2023-01-20 │ 200.0  │ R2                    │  │
+│  │ C003    │ Bob       │ 2023-02-01 │ 300.5  │ R1                    │  │
+│  │ C004    │ Tech      │ 2023-03-10 │ 400.0  │ R3                    │  │
+│  │ C005    │ Acme      │ 2023-04-05 │ 500.0  │ R999                  │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Phase 1: Semantic Profiler (IR-0)                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ DetectorRegistry 并行检测:                                          │  │
+│  │   PhoneDetector    → 无匹配                                        │  │
+│  │   EmailDetector    → 无匹配                                        │  │
+│  │   DateDetector     → 匹配 5/5 (coverage=1.0) → date fingerprint   │  │
+│  │   CurrencyDetector → 匹配 5/5 (符号检测) → currency fingerprint   │  │
+│  │   BooleanDetector  → 无匹配                                        │  │
+│  │   FiniteDomainDetector → REGION_ID 有 5 个唯一值 → finite_domain  │  │
+│  │   UUIDDetector     → 无匹配                                        │  │
+│  │   IdentifierDetector → CUST_ID 高唯一率 → identifier              │  │
+│  │   URLDetector      → 无匹配                                        │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  EvidenceFusionEngine 消解冲突:                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ CUST_ID:     identifier (0.95)                                     │  │
+│  │ ENTRY_DT:    date (0.95)                                           │  │
+│  │ AMOUNT:      currency (0.85)                                       │  │
+│  │ REGION_ID:   finite_domain (0.82)                                  │  │
+│  │ FULL_NAME:   无强证据                                              │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  输出: List[ColumnProfileIR]                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Column: CUST_ID                                                    │  │
+│  │   storage_type: string                                             │  │
+│  │   unique_ratio: 1.0                                                │  │
+│  │   pattern_fingerprints: [{'pattern_name':'identifier','conf':0.95}]│  │
+│  │   name_embedding: [0.12, -0.34, ...] (384维)                      │  │
+│  │                                                                     │  │
+│  │ Column: REGION_ID                                                  │  │
+│  │   storage_type: string                                             │  │
+│  │   unique_ratio: 0.8                                                │  │
+│  │   pattern_fingerprints: [{'pattern_name':'finite_domain',...}]     │  │
+│  │   top_frequencies: {'R1': 2, 'R2': 1, 'R3': 1, 'R999': 1}         │  │
+│  │   separator_profile: {}                                            │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     Phase 2: Evidence Graph Builder (IR-1)                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ NodeBuilder:                                                        │  │
+│  │   CUST_ID: pk_score=0.92 (高)                                       │  │
+│  │   REGION_ID: pk_score=0.45 (低)                                     │  │
+│  │   behavior_fingerprint: 计算每列的变化率、熵、基数比                 │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ CandidateGenerator:                                                 │  │
+│  │   行为分块: CUST_ID 和 REGION_ID 在同一桶 → 生成候选对              │  │
+│  │   LSH: 补充召回（值域重叠）                                         │  │
+│  │   预剪枝: 过滤无效对                                                │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ EvidenceCalculator (对候选对 CUST_ID ↔ REGION_ID):                 │  │
+│  │   approximate_fd_strength (A→B): 1.0                               │  │
+│  │   reverse_fd_strength (B→A): 0.8                                   │  │
+│  │   min_group_purity: 1.0                                            │  │
+│  │   inclusion_degree: 0.0 (REGION_ID 值不在 CUST_ID 中)              │  │
+│  │   value_overlap: 0.0                                               │  │
+│  │   name_similarity: 0.0                                             │  │
+│  │   embedding_similarity: 0.25                                       │  │
+│  │   datatype_compatibility: 1.0 (都是 string)                        │  │
+│  │   distribution_similarity: 0.4                                     │  │
+│  │   superkey_error: 0.0 (CUST_ID 唯一)                               │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ WeightedFusionEngine:                                               │  │
+│  │   weight = 0.14*1.0 + 0.04*1.0 + 0.14*0.0 + 0.08*0.0 + ...       │  │
+│  │          ≈ 0.42 > 0.3 → 保留边                                     │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ EdgeTypeDecider:                                                    │  │
+│  │   approximate_fd_strength=1.0 > 0.8 → FUNCTIONAL_DEPENDENCY        │  │
+│  │   inclusion_degree=0.0 < 0.9 → 不标记 POSSIBLE_FK                  │  │
+│  │   key-induced? reverse_fd=0.8 < 0.9 → 不触发                       │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  输出: EvidenceGraph                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Nodes: 5 (CUST_ID, FULL_NAME, ENTRY_DT, AMOUNT, REGION_ID)        │  │
+│  │ Edges: 1                                                           │  │
+│  │   CUST_ID --[FUNCTIONAL_DEPENDENCY]--> REGION_ID                   │  │
+│  │   weight: 0.42                                                     │  │
+│  │   evidence: {fd_strength:1.0, inclusion:0.0, name_sim:0.0, ...}   │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 七、关键设计原则总结
+
+### 7.1 证据驱动（Evidence-Driven）
+
+- 每个检测器只回答 **“我观察到了什么？”** ，不回答 **“它到底是什么？”**。
+- 证据包含 **类型、置信度、原始分数、证据链、元数据**。
+- 最终决策由上层推理引擎（Phase 3）综合所有证据做出。
+
+### 7.2 确定性优先（Determinism First）
+
+- Phase 0.5 和 Phase 1 的所有操作都是**确定性的**（同样的输入 → 同样的输出）。
+- 不依赖 LLM 或机器学习模型做 Phase 1 决策（LLM 仅在 Phase 4 用于语义消歧）。
+- 可复现、可审计。
+
+### 7.3 列级聚合（Column-level Aggregation）
+
+- 单个值的检测结果不足以判断整列的类型。
+- 所有检测器在 `detect()` 方法中聚合样本结果，计算 **覆盖率（coverage）** 和 **一致性（consistency）**。
+
+### 7.4 多重证据融合（Multi-Evidence Fusion）
+
+- 不依赖单一证据做决策。
+- 13+ 个维度的证据通过**加权融合**计算综合权重。
+- 冲突证据通过 `EXCLUSIVE_GROUPS` 消解。
+
+### 7.5 可解释性（Explainability）
+
+- 每个证据都携带 `evidence` 列表（人类可读的证据链）。
+- 每个 `PatternFingerprint` 和 `SemanticCandidate` 都包含置信度和支持证据。
+- 输出格式适合人类审计和 LLM Prompt 构建。
+
+---
+
+## 八、与旧版（2026-08-02）的主要差异
+
+| 维度 | 旧版（8月2日） | 新版（8月13日） |
+| :--- | :--- | :--- |
+| **DateDetector** | 使用 `dateutil` 模糊解析，常误判 ID 为日期 | 严格格式匹配（16 种格式），无 `dateutil` |
+| **Detector 职责** | 倾向于“分类器” | 严格定位为“证据产生器” |
+| **IdentifierDetector** | 弱（仅粗粒度正则） | 三层证据（Shape + Stats + Context） |
+| **FiniteDomainDetector** | 不存在 | 新增：检测有限值域（枚举） |
+| **EvidenceFusion** | 简单的冲突消解 | `EXCLUSIVE_GROUPS` + 优先级排序 |
+| **FD 证据** | 仅单向 FD 强度 | 双向 FD + `fd_violation_ratio` + `min_group_purity` + `reverse_fd` + `superkey_error` |
+| **key-induced FD** | 不处理 | 检测并跳过双向唯一列的虚假 FD |
+| **候选对生成** | 行为分块 + LSH | 行为分块 + LSH + **预剪枝** |
+| **边类型决策** | 仅基于阈值 | FD+Inclusion 组合增强 + key-induced 过滤 |
+| **列名嵌入** | 无 | `name_embedding`（384 维）用于语义相似度 |
+
+---
+
+## 九、文件与模块职责速查（Phase 0.5 ~ Phase 2）
+
+| 文件 | 核心职责 |
+| :--- | :--- |
+| `technical_normalizer.py` | Phase 0.5：确定性清洗（Unicode + 空白 + 控制字符） |
+| `normalization_model.py` | Phase 0.5 输出模型（`NormalizationReport`） |
+| `profile_ir.py` | Phase 1 输出模型（`ColumnProfileIR`、`PatternFingerprint`、`SemanticCandidate`） |
+| `detectors.py` | Phase 1 检测器注册表 + 所有检测器实现（9 个） |
+| `evidence_fusion.py` | Phase 1 证据融合引擎（冲突消解） |
+| `semantic_profiler.py` | Phase 1 主编排器（调用检测器、聚合结果、构建 `ColumnProfileIR`） |
+| `evidence_graph_ir.py` | Phase 2 输出模型（`EvidenceGraph`、`GraphNode`、`GraphEdge`、`EvidenceDetail`） |
+| `column_embedding_vector.py` | 列语义向量（用于 Phase 2 相似度计算） |
+| `builder.py` | Phase 2 主编排器（节点构建 → 候选对生成 → 证据计算 → 融合 → 边类型决策） |
+
+---
+
+## 十、扩展性说明
+
+### 10.1 新增检测器
+
+继承 `BaseDetector`，实现 `detect()` 方法，返回 `DetectionResult`，然后注册到 `DetectorRegistry`。
+
+### 10.2 新增证据维度
+
+在 `EvidenceDetail` 中新增字段，在 `EvidenceCalculator.compute()` 中计算，在 `WeightedFusionEngine.WEIGHTS` 中配置权重。
+
+### 10.3 新增边类型
+
+在 `EdgeType` 枚举中新增，在 `EdgeTypeDecider.decide()` 中添加决策逻辑。
+
+### 10.4 新增候选对生成策略
+
+在 `CandidateGenerator.generate()` 中添加新的召回路径（如基于语义向量的 ANN 搜索）。
+
+---
+
+*本概述基于代码库 `Enterprise-Data-Compiler` 的 Phase 0.5 至 Phase 2 重构版本编写，反映截至 2026-08-13 的系统设计状态。*
